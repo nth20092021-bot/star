@@ -272,9 +272,11 @@ export class OrbitalPhysicsEngine {
     );
     this.lastUpdateWall = now;
 
-    // 1. Quỹ đạo vi sai của 28 ngôi sao
+    // 1. Quỹ đạo vi sai của 28 ngôi sao (ngôi sao chiến thắng đứng yên tại tâm vụ nổ Supernova)
     for (const star of this.stars) {
-      updateStarOrbit(star, elapsed);
+      if (!star.isWinner) {
+        updateStarOrbit(star, elapsed);
+      }
       if (star.brightness > 1.0 && !star.isWinner) {
         star.brightness = Math.max(1.0, star.brightness - safeDt * 1.8);
       }

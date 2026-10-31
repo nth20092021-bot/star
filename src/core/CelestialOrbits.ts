@@ -47,9 +47,9 @@ export function generateCelestialStars(): StarNode[] {
   const maxR = CELESTIAL_CONSTANTS.MAX_ORBIT_RADIUS; // 32
 
   for (let i = 0; i < count; i++) {
-    // Phân bổ đều cao độ y trên hình cầu (-0.85 đến +0.85 để không tụ quá dày ở 2 cực)
-    const normalizedY = 1 - (i / (count - 1)) * 2;
-    const yClamped = normalizedY * 0.82;
+    // Phân bổ đều cao độ y trên vòm trời bán cầu trên đài thiên văn (+0.12 đến +0.86)
+    const normalizedY = 0.12 + (i / (count - 1)) * 0.74;
+    const yClamped = normalizedY;
     const radiusAtY = Math.sqrt(Math.max(0, 1 - yClamped * yClamped));
 
     const theta = goldenAngle * i;

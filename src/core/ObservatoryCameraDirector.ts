@@ -7,7 +7,6 @@ export type CinematicAct = 0 | 1 | 2 | 3 | 4;
 
 const ACT1_END = 2.0;
 const ACT2_END = 7.5;
-const ACT3_END = 10.5;
 
 const BASE_CAMERA_POSITION = new THREE.Vector3(0, 13, 56);
 const BASE_LOOK_TARGET = new THREE.Vector3(0, 0.4, 0);
@@ -75,6 +74,7 @@ export class ObservatoryCameraDirector {
 
   private readonly diveStartPosition = new THREE.Vector3().copy(BASE_CAMERA_POSITION);
   private readonly winnerPosition = new THREE.Vector3();
+  private readonly finaleViewDir = new THREE.Vector3(0, 0.35, 1);
   private readonly linkedPositions: THREE.Vector3[] = [];
 
   private readonly lastCometDirection = new THREE.Vector3(0, 0, -1);
@@ -138,6 +138,21 @@ export class ObservatoryCameraDirector {
         (performance.now() - this.cinematicStartedAt) / 1000
       );
       this.lockTime = this.cinematicTime;
+
+      // Xác định hướng nhìn tự nhiên từ camera về ngôi sao chiến thắng để không giật góc
+      this.finaleViewDir.subVectors(this.posePosition, this.winnerPosition);
+      if (this.finaleViewDir.lengthSq() < 1e-4) {
+        this.finaleViewDir.set(0, 0.35, 1);
+      }
+      this.finaleViewDir.normalize();
+      // Nâng nhẹ cao độ để nhìn bao quát ngôi sao nổ (không bị chúi góc từ dưới lên)
+      this.finaleViewDir.y = Math.max(0.18, Math.min(0.45, this.finaleViewDir.y));
+      this.finaleViewDir.normalize();
+
+      // Khóa tức thì mục tiêu ngắm chính xác vào tâm ngôi sao nổ
+      this.desiredLookTarget.copy(this.winnerPosition);
+      this.smoothedLookTarget.copy(this.winnerPosition);
+
       this.linkedPositions.unshift(winnerStar.currentPosition.clone());
       if (this.linkedPositions.length > 4) {
         this.linkedPositions.length = 4;
@@ -216,13 +231,10 @@ export class ObservatoryCameraDirector {
     } else if (this.cinematicTime < ACT2_END) {
       this.act = 2;
       this.updateChase(wallDt, comet);
-    } else if (this.cinematicTime < ACT3_END) {
+    } else {
+      // Giữ bám đuôi sao chổi cho tới khi nhận sự kiện khóa mục tiêu Supernova thực sự
       this.act = 3;
       this.updateSlowMotionArc(wallDt, comet);
-    } else {
-      // Phòng trường hợp sự kiện lock tới muộn hơn một frame.
-      this.act = 4;
-      this.updateFinale(wallDt);
     }
   }
 
@@ -422,29 +434,25 @@ export class ObservatoryCameraDirector {
     }
 
     const t4 = Math.max(0, this.cinematicTime - this.lockTime);
-    const dolly = easeOutCubic(clamp01(t4 / 2.4));
-    const orbitAngle = 0.35 + t4 * 0.28;
-    const radius = 8.5 + 19 * dolly;
-    const height = 2.4 + 7.5 * dolly;
+    const dolly = easeOutCubic(clamp01(t4 / 2.0));
+    // Khoảng cách lùi nhẹ từ 14 lên 22 để ngôi sao và vụ nổ Supernova luôn ở chính giữa khung hình
+    const distance = 14.0 + 8.0 * dolly;
 
-    this.desiredPosition.set(
-      this.winnerPosition.x + Math.sin(orbitAngle) * radius,
-      this.winnerPosition.y + height,
-      this.winnerPosition.z + Math.cos(orbitAngle) * radius
-    );
+    this.desiredPosition.copy(this.winnerPosition).addScaledVector(this.finaleViewDir, distance);
+    this.desiredPosition.y = Math.max(3.0, this.desiredPosition.y);
     this.desiredLookTarget.copy(this.winnerPosition);
     this.currentUp.copy(WORLD_UP);
     this.currentRoll = 0;
-    this.lookLambda = 3.2;
-    this.rotationSpeedCap = 1.0;
+    this.lookLambda = 20.0;
+    this.rotationSpeedCap = 12.0;
 
-    const fovTarget = 45 + 13 * easeInOutCubic(clamp01(t4 / 1.7));
-    this.smoothPose(dt, 2.8 - dolly * 0.6, 2.8, fovTarget, 1.9);
+    const fovTarget = 46 + 6 * dolly;
+    this.smoothPose(dt, 4.5, 7.0, fovTarget, 2.5);
 
     // Rung máy đúng 0.25s quanh thời điểm vụ nổ bung ra (lock + 0.5s).
     if (t4 > 0.5 && t4 < 0.75) {
       const strength = 1 - smoothstep(0.5, 0.75, t4);
-      const amplitude = 0.5 * strength;
+      const amplitude = 0.45 * strength;
       this.shakeOffset.set(
         Math.sin(t4 * 97.0) * amplitude,
         Math.sin(t4 * 131.0 + 1.3) * amplitude * 0.8,
