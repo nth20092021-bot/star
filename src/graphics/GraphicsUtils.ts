@@ -41,6 +41,16 @@ export function hash01(seed: number): number {
   return x;
 }
 
+/**
+ * Trạng thái kịch bản điện ảnh 12 giây do CameraDirector phát ra,
+ * được chia sẻ cho môi trường, mạng chòm sao và supernova.
+ */
+export interface CinematicPhase {
+  active: boolean;
+  time: number;
+  act: number;
+}
+
 /** Bộ sinh số giả ngẫu nhiên có seed, tái lập được giữa các lần render. */
 export function createSeededRandom(seed: number): () => number {
   let a = seed >>> 0;

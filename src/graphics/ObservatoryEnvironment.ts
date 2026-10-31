@@ -3,10 +3,18 @@ import { CELESTIAL_CONSTANTS } from '../shared/CosmicTypes';
 import { MilkyWaySkyDome } from './MilkyWaySkyDome';
 import {
   createBrassTextures,
+  createGlowTexture,
   createMarbleTexture,
   createZodiacRingTexture,
 } from './VisualTextures';
-import { clamp, createSeededRandom, damp, disposeObjectTree } from './GraphicsUtils';
+import {
+  clamp,
+  createSeededRandom,
+  damp,
+  disposeObjectTree,
+  easeInOutCubic,
+} from './GraphicsUtils';
+import type { CinematicPhase } from './GraphicsUtils';
 
 interface ArmillaryRing {
   pivot: THREE.Group;
@@ -22,6 +30,11 @@ interface ArmillaryRing {
 const COLUMN_COUNT = 12;
 const COLUMN_RADIUS = 44;
 const FLOOR_TOP = -20;
+
+function smoothStep(edge0: number, edge1: number, value: number): number {
+  const t = clamp((value - edge0) / Math.max(1e-5, edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
 
 /**
  * Đài Thiên Văn Cổ Kính:
@@ -39,13 +52,20 @@ export class ObservatoryEnvironment {
   private readonly zodiacPivot: THREE.Group;
   private readonly zodiacMaterial: THREE.MeshBasicMaterial;
   private readonly axisParent: THREE.Group;
-  private readonly centralOrb: THREE.Mesh;
+  private centralOrb!: THREE.Mesh;
+  private centralOrbMaterial!: THREE.MeshBasicMaterial;
+  private chargeSprite!: THREE.Sprite;
+  private chargeMaterial!: THREE.SpriteMaterial;
+  private chargeLight!: THREE.PointLight;
+  private launchRing!: THREE.Mesh;
+  private launchRingMaterial!: THREE.MeshBasicMaterial;
   private readonly moteUniforms = {
     uTime: { value: 0 },
     uPixelRatio: { value: 1 },
   };
 
   private weave = 0;
+  private awake = 0;
 
   constructor(maxAnisotropy = 1) {
     this.group.name = 'ObservatoryEnvironment';
@@ -86,7 +106,10 @@ export class ObservatoryEnvironment {
     this.createColonnade(marbleTexture);
     this.createArmillarySphere();
     this.axisParent = this.createAxisRod();
-    this.centralOrb = this.createCentralOrb();
+    const orb = this.createCentralOrb();
+    this.centralOrb = orb.mesh;
+    this.centralOrbMaterial = orb.material;
+    this.createAwakeningFx();
 
     const motes = this.createDustMotes();
     this.group.add(motes);
@@ -423,14 +446,16 @@ export class ObservatoryEnvironment {
     return parent;
   }
 
-  private createCentralOrb(): THREE.Mesh {
-    const orb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.9, 28, 20),
-      new THREE.MeshBasicMaterial({
-        color: new THREE.Color(1.45, 0.98, 0.5),
-        toneMapped: false,
-      })
-    );
+  private createCentralOrb(): {
+    mesh: THREE.Mesh;
+    material: THREE.MeshBasicMaterial;
+  } {
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(1.45, 0.98, 0.5),
+      toneMapped: false,
+    });
+
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(0.9, 28, 20), material);
     orb.name = 'CentralSunOrb';
     orb.position.set(0, -1, 0);
     this.group.add(orb);
@@ -448,7 +473,58 @@ export class ObservatoryEnvironment {
     );
     orb.add(halo);
 
-    return orb;
+    return { mesh: orb, material };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Năng lượng thức tỉnh: quả cầu tích điện + sóng xung kích sàn       */
+  /* ------------------------------------------------------------------ */
+
+  private createAwakeningFx(): void {
+    const glowTexture = createGlowTexture(256);
+
+    this.chargeMaterial = new THREE.SpriteMaterial({
+      map: glowTexture,
+      color: new THREE.Color(1.6, 1.15, 0.62),
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    });
+    this.chargeSprite = new THREE.Sprite(this.chargeMaterial);
+    this.chargeSprite.name = 'CentralOrbChargeHalo';
+    this.chargeSprite.position.set(0, -1, 0);
+    this.chargeSprite.scale.setScalar(3);
+    this.chargeSprite.visible = false;
+    this.chargeSprite.renderOrder = 18;
+    this.group.add(this.chargeSprite);
+
+    this.chargeLight = new THREE.PointLight(0xffd49a, 0, 120, 2);
+    this.chargeLight.position.set(0, -1, 0);
+    this.group.add(this.chargeLight);
+
+    this.launchRingMaterial = new THREE.MeshBasicMaterial({
+      name: 'AwakeningFloorShockwave',
+      color: new THREE.Color(1.3, 0.92, 0.5),
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    this.launchRing = new THREE.Mesh(
+      new THREE.TorusGeometry(1, 0.07, 8, 160),
+      this.launchRingMaterial
+    );
+    this.launchRing.name = 'AwakeningFloorRing';
+    this.launchRing.rotation.x = Math.PI / 2;
+    this.launchRing.position.y = FLOOR_TOP + 0.42;
+    this.launchRing.visible = false;
+    this.launchRing.renderOrder = 3;
+    this.group.add(this.launchRing);
   }
 
   /* ------------------------------------------------------------------ */
@@ -537,9 +613,42 @@ export class ObservatoryEnvironment {
     this.skyDome.setPixelRatio(pixelRatio);
   }
 
-  public update(dt: number, elapsed: number, weaveIntensity: number): void {
+  public update(
+    dt: number,
+    elapsed: number,
+    weaveIntensity: number,
+    phase: CinematicPhase
+  ): void {
     this.weave = damp(this.weave, clamp(weaveIntensity, 0, 1), 1.8, dt);
-    const speed = 1 + this.weave * 1.7;
+
+    const cineTime = Math.max(0, phase.time);
+    const charge = phase.active
+      ? easeInOutCubic(clamp(cineTime / 1.8, 0, 1)) *
+        (1 - smoothStep(2.0, 2.7, cineTime))
+      : 0;
+    const launchPulse =
+      phase.active && cineTime >= 1.9
+        ? Math.min(1, Math.exp(-Math.max(0, cineTime - 2.0) * 2.5))
+        : 0;
+    const launchAge = phase.active ? Math.max(0, cineTime - 2.0) : 0;
+    const zodiacFlare = charge * 0.95 + launchPulse * 0.9;
+
+    const targetAwake = !phase.active
+      ? 0
+      : cineTime < 2
+        ? easeInOutCubic(clamp(cineTime / 1.6, 0, 1))
+        : phase.act === 4
+          ? 0.5
+          : 0.25;
+    this.awake = damp(
+      this.awake,
+      targetAwake,
+      targetAwake > this.awake ? 3.0 : 1.2,
+      dt
+    );
+
+    // Act 1: các vòng đồng quay ~4× như con quay tích năng lượng.
+    const speed = 1 + this.awake * 3;
 
     for (const ring of this.rings) {
       ring.pivot.rotation.y += ring.spin * dt * speed;
@@ -551,16 +660,76 @@ export class ObservatoryEnvironment {
     }
 
     this.axisParent.rotation.y += dt * 0.018 * speed;
-    this.zodiacPivot.rotation.y = elapsed * 0.022 * (1 + this.weave * 0.6);
-    this.zodiacMaterial.opacity = 0.66 + 0.1 * Math.sin(elapsed * 0.7) + this.weave * 0.14;
+    this.zodiacPivot.rotation.y =
+      elapsed * 0.022 * (1 + this.weave * 0.6 + this.awake * 1.5);
 
-    this.brassMaterial.emissiveIntensity = 0.38 + 0.08 * Math.sin(elapsed * 0.9) + this.weave * 0.3;
+    // Vòng cổ ngữ bùng sáng theo nhịp tích năng rồi lóe lên khi phóng tia.
+    this.zodiacMaterial.opacity = clamp(
+      0.66 + 0.1 * Math.sin(elapsed * 0.7) + this.weave * 0.14 + zodiacFlare * 0.28,
+      0,
+      1
+    );
+    this.zodiacMaterial.color.setScalar(1 + zodiacFlare * 0.8);
 
-    const orbPulse = 1 + Math.sin(elapsed * 1.2) * 0.05 + this.weave * 0.1;
+    this.brassMaterial.emissiveIntensity =
+      0.38 +
+      0.08 * Math.sin(elapsed * 0.9) +
+      this.weave * 0.3 +
+      charge * 0.6 +
+      launchPulse * 0.8;
+
+    const orbPulse =
+      1 +
+      Math.sin(elapsed * 1.2) * 0.05 +
+      this.weave * 0.1 +
+      charge * 0.28 +
+      launchPulse * 0.35;
     this.centralOrb.scale.setScalar(orbPulse);
+    this.centralOrbMaterial.color.setRGB(
+      1.45 + charge * 0.32 + launchPulse * 0.65,
+      0.98 + charge * 0.26 + launchPulse * 0.5,
+      0.5 + charge * 0.2 + launchPulse * 0.4
+    );
+
+    const chargeVisible = charge > 0.01 || launchPulse > 0.01;
+    this.chargeSprite.visible = chargeVisible;
+    if (chargeVisible) {
+      const chargeScale = 2.8 + charge * 4.2 + launchPulse * 6.8;
+      this.chargeSprite.scale.setScalar(chargeScale);
+      this.chargeMaterial.opacity = clamp(charge * 0.4 + launchPulse * 0.68, 0, 1);
+      this.chargeLight.intensity = charge * 170 + launchPulse * 380;
+    } else {
+      this.chargeLight.intensity = 0;
+    }
+
+    const ringVisible = phase.active && cineTime >= 1.9 && launchAge < 2.2;
+    this.launchRing.visible = ringVisible;
+    if (ringVisible) {
+      const ringScale = 3 + launchAge * 19;
+      this.launchRing.scale.set(ringScale, ringScale, 1);
+      this.launchRingMaterial.opacity =
+        smoothStep(0, 0.12, launchAge) * (1 - smoothStep(0.2, 2.2, launchAge)) * 0.5;
+    } else {
+      this.launchRingMaterial.opacity = 0;
+    }
 
     this.skyDome.update(elapsed, dt);
     this.moteUniforms.uTime.value = elapsed;
+  }
+
+  /** Trả môi trường về trạng thái tĩnh ngay sau khi reset ván chơi. */
+  public resetCinematic(): void {
+    this.awake = 0;
+    this.chargeSprite.visible = false;
+    this.chargeLight.intensity = 0;
+    this.launchRing.visible = false;
+    this.launchRingMaterial.opacity = 0;
+    this.chargeMaterial.opacity = 0;
+    this.zodiacMaterial.opacity = 0.72;
+    this.zodiacMaterial.color.setScalar(1);
+    this.centralOrb.scale.setScalar(1);
+    this.centralOrbMaterial.color.setRGB(1.45, 0.98, 0.5);
+    this.brassMaterial.emissiveIntensity = 0.46;
   }
 
   public dispose(): void {

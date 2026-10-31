@@ -438,6 +438,75 @@ export function createGlowTexture(size = 256): THREE.CanvasTexture {
 }
 
 /* ------------------------------------------------------------------ */
+/* Hologram tên học sinh (mờ, phát sáng) khi tia sáng chạm sao         */
+/* ------------------------------------------------------------------ */
+
+export function createHologramNameTexture(studentName: string): THREE.CanvasTexture {
+  const cleanName = (studentName || '').normalize('NFC');
+  const width = 768;
+  const height = 192;
+  const { canvas, ctx } = createCanvas(width, height);
+  const cx = width / 2;
+  const cy = height * 0.47;
+
+  const font = (px: number) =>
+    `600 ${px}px "Be Vietnam Pro", "Segoe UI", "Times New Roman", sans-serif`;
+
+  let fontSize = 76;
+  ctx.font = font(fontSize);
+  while (ctx.measureText(cleanName).width > width * 0.78 && fontSize > 34) {
+    fontSize -= 2;
+    ctx.font = font(fontSize);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Quầng xanh lạnh phía sau chữ
+  ctx.save();
+  ctx.filter = 'blur(12px)';
+  ctx.fillStyle = 'rgba(86, 198, 255, 0.55)';
+  ctx.fillText(cleanName, cx, cy);
+  ctx.restore();
+
+  // Lớp chữ hologram hơi nhòe
+  ctx.save();
+  ctx.filter = 'blur(2.6px)';
+  ctx.fillStyle = 'rgba(205, 246, 255, 0.92)';
+  ctx.shadowColor = 'rgba(120, 220, 255, 0.85)';
+  ctx.shadowBlur = 20;
+  ctx.fillText(cleanName, cx, cy);
+  ctx.restore();
+
+  // Vạch quét và vạch chia hai bên
+  const lineY = cy + fontSize * 0.72;
+  ctx.strokeStyle = 'rgba(150, 225, 255, 0.32)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(width * 0.2, lineY);
+  ctx.lineTo(width * 0.8, lineY);
+  ctx.stroke();
+
+  for (let i = 0; i < 16; i += 1) {
+    const x = width * 0.2 + (i / 15) * width * 0.6;
+    const length = i % 4 === 0 ? 8 : 4;
+    ctx.beginPath();
+    ctx.moveTo(x, lineY);
+    ctx.lineTo(x, lineY + length);
+    ctx.stroke();
+  }
+
+  drawSparkle(ctx, width * 0.12, cy, 5, '#ffe4a3', 0.8);
+  drawSparkle(ctx, width * 0.88, cy, 5, '#ffe4a3', 0.8);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/* ------------------------------------------------------------------ */
 /* Bảng vinh danh tên học sinh 2048 x 1024                             */
 /* ------------------------------------------------------------------ */
 

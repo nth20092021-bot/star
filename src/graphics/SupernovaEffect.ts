@@ -57,6 +57,7 @@ export class SupernovaEffect {
 
   private active = false;
   private time = 0;
+  private startedAt = 0;
   private bloomBoost = 0;
   private readonly projected = new THREE.Vector3();
 
@@ -110,13 +111,13 @@ export class SupernovaEffect {
 
     /* --------------------- Vành xung kích ----------------------- */
     this.shockwaves.push(
-      this.createShockwave(21, new THREE.Color(1.35, 0.95, 0.45), 0.08, 2.3, 1.15)
+      this.createShockwave(21, new THREE.Color(1.35, 0.95, 0.45), 0.5, 1.55, 1.25)
     );
     this.shockwaves.push(
-      this.createShockwave(32, new THREE.Color(0.5, 0.95, 1.25), 0.26, 2.7, 0.95)
+      this.createShockwave(32, new THREE.Color(0.5, 0.95, 1.25), 0.72, 1.8, 1.0)
     );
     this.shockwaves.push(
-      this.createShockwave(43, new THREE.Color(0.85, 0.58, 1.45), 0.5, 3.1, 0.75)
+      this.createShockwave(43, new THREE.Color(0.85, 0.58, 1.45), 0.96, 2.1, 0.8)
     );
 
     /* ------------------------ Bụi tinh tú ------------------------ */
@@ -264,11 +265,12 @@ export class SupernovaEffect {
 
     this.active = true;
     this.time = 0;
+    this.startedAt = performance.now();
     this.bloomBoost = 0;
 
     this.flashSprite.visible = true;
-    this.flashSprite.scale.setScalar(10.5);
-    this.flashMaterial.opacity = 0.55;
+    this.flashSprite.scale.setScalar(7.2);
+    this.flashMaterial.opacity = 0.14;
 
     this.winnerHalo.visible = false;
     this.haloMaterial.opacity = 0;
@@ -304,25 +306,29 @@ export class SupernovaEffect {
   /* Cập nhật mỗi frame                                                 */
   /* ------------------------------------------------------------------ */
 
-  public update(dt: number, camera: THREE.Camera): void {
+  public update(_dt: number, camera: THREE.Camera): void {
     if (!this.active) return;
 
-    this.time += dt;
+    // Đồng hồ thực: đúng 11.0s bung nổ, 12.0s bảng tên hoàn tất.
+    this.time = Math.max(0, (performance.now() - this.startedAt) / 1000);
     const t = this.time;
 
-    // Ngôi sao co lại rồi bung flash
-    if (t < 0.24) {
-      const p = clamp(t / 0.24, 0, 1);
-      const scale = THREE.MathUtils.lerp(7.5, 1.7, easeInOutCubic(p));
-      this.flashSprite.scale.setScalar(scale);
-      this.flashMaterial.opacity = 0.5 + 0.3 * p;
+    const IMPLOSION_END = 0.5;
+
+    // Ngôi sao co lại ~0.3s cuối rồi bung nổ đúng 11.0s (lock 10.5 + 0.5s).
+    if (t < IMPLOSION_END) {
+      const p = easeInOutCubic(clamp(t / IMPLOSION_END, 0, 1));
+      const deepen = easeInOutCubic(clamp((t - 0.2) / 0.3, 0, 1));
+      const scale = THREE.MathUtils.lerp(7.2, 1.05, p) - deepen * 0.35;
+      this.flashSprite.scale.setScalar(Math.max(0.55, scale));
+      this.flashMaterial.opacity = 0.1 + 0.46 * deepen;
     } else {
-      const q = clamp((t - 0.24) / 1.6, 0, 1);
+      const q = clamp((t - IMPLOSION_END) / 1.9, 0, 1);
       if (q < 1) {
         this.flashSprite.visible = true;
-        const scale = THREE.MathUtils.lerp(1.7, 30, easeOutCubic(q));
+        const scale = THREE.MathUtils.lerp(1.4, 32, easeOutCubic(q));
         this.flashSprite.scale.setScalar(scale);
-        this.flashMaterial.opacity = Math.pow(1 - q, 1.7) * 0.55;
+        this.flashMaterial.opacity = Math.pow(1 - q, 1.7) * 0.52;
       } else {
         this.flashSprite.visible = false;
         this.flashMaterial.opacity = 0;
@@ -330,13 +336,13 @@ export class SupernovaEffect {
     }
 
     // Quầng sáng vinh danh tồn tại cùng bảng tên
-    if (t > 0.18) {
-      const q = clamp((t - 0.18) / 1.1, 0, 1);
+    if (t > 0.46) {
+      const q = clamp((t - 0.46) / 1.1, 0, 1);
       this.winnerHalo.visible = true;
       const haloScale = 5.4 + 2.0 * easeOutCubic(q) + Math.sin(t * 0.9) * 0.7;
       this.winnerHalo.scale.setScalar(haloScale);
       this.haloMaterial.opacity =
-        (0.12 + 0.08 * Math.sin(t * 1.3)) * q + Math.max(0, 0.12 * Math.exp(-(t - 0.3) * 0.5));
+        (0.12 + 0.08 * Math.sin(t * 1.3)) * q + Math.max(0, 0.12 * Math.exp(-(t - 0.5) * 0.5));
     }
 
     // Sóng xung kích
@@ -357,12 +363,12 @@ export class SupernovaEffect {
     }
 
     // Bụi tinh tú
-    this.particles.visible = t > 0.2 && t < 8.6;
-    this.particleUniforms.uTime.value = Math.max(0, t - 0.22);
+    this.particles.visible = t > 0.48 && t < 8.6;
+    this.particleUniforms.uTime.value = Math.max(0, t - IMPLOSION_END);
 
     // Bloom dâng lên rồi lắng xuống
-    const rise = clamp((t - 0.16) / 0.22, 0, 1);
-    this.bloomBoost = clamp(rise * Math.exp(-Math.max(0, t - 0.38) * 0.72), 0, 1);
+    const rise = clamp((t - 0.46) / 0.18, 0, 1);
+    this.bloomBoost = clamp(rise * Math.exp(-Math.max(0, t - 0.64) * 0.72), 0, 1);
   }
 
   /* ------------------------------------------------------------------ */
@@ -370,7 +376,7 @@ export class SupernovaEffect {
   /* ------------------------------------------------------------------ */
 
   public renderOverlay(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
-    if (!this.active || !this.plaqueTexture || this.time < 0.15) return;
+    if (!this.active || !this.plaqueTexture || this.time < 0.66) return;
 
     this.updatePlaqueTransform(camera);
 
@@ -390,7 +396,7 @@ export class SupernovaEffect {
     const baseWidth = Math.min(width * 0.88, height * 1.3, 940);
     const baseHeight = baseWidth * 0.5;
 
-    const appear = clamp((t - 0.15) / 0.9, 0, 1);
+    const appear = clamp((t - 0.66) / 0.64, 0, 1);
     const pop = Math.min(1.035, easeOutBack(appear));
     const scaleMultiplier = 0.08 + 0.92 * pop;
 
@@ -407,14 +413,14 @@ export class SupernovaEffect {
     const targetX = 0;
     const targetY = height * 0.035;
 
-    const move = easeInOutCubic(clamp((t - 0.15) / 0.8, 0, 1));
+    const move = easeInOutCubic(clamp((t - 0.66) / 0.74, 0, 1));
     const float = Math.sin(t * 0.8) * 1.6 * move;
     const x = THREE.MathUtils.lerp(startX, targetX, move);
     const y = THREE.MathUtils.lerp(startY, targetY, move) + float;
 
     this.plaqueMesh.position.set(x, y, 0);
     this.plaqueMesh.scale.set(baseWidth * scaleMultiplier, baseHeight * scaleMultiplier, 1);
-    this.plaqueMaterial.opacity = clamp((t - 0.15) / 0.45, 0, 1) * 0.98;
+    this.plaqueMaterial.opacity = clamp((t - 0.66) / 0.38, 0, 1) * 0.98;
   }
 
   private applyOverlayViewport(): void {

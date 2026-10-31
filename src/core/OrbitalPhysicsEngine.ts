@@ -8,6 +8,55 @@ import { CELESTIAL_CONSTANTS } from '../shared/CosmicTypes';
 import { cosmicEventBus } from '../shared/CosmicEventBus';
 import { generateCelestialStars, updateStarOrbit } from './CelestialOrbits';
 
+/* ====================================================================== */
+/* Nhịp kịch bản 12.0 giây                                                */
+/* ====================================================================== */
+
+const ACT1_LAUNCH = 2.0;
+const ACT2_END = 7.5;
+const ACT2_VISIT_COUNT = 14;
+
+/**
+ * Mốc chạm sao (giây):
+ * - 14 ngôi sao của Act 2 trải đều 2.0 → 7.5s.
+ * - Ngôi thứ 15 (mở màn Act 3): 8.15s.
+ * - Ngôi áp chót (ghìm lại, gần như dừng): 9.0s.
+ * - Ngôi chiến thắng thật sự: 10.5s.
+ */
+const HIT_TIMES: readonly number[] = (() => {
+  const times: number[] = [];
+  for (let i = 0; i < ACT2_VISIT_COUNT; i += 1) {
+    times.push(ACT1_LAUNCH + ((ACT2_END - ACT1_LAUNCH) * (i + 1)) / ACT2_VISIT_COUNT);
+  }
+  times.push(8.15, 9.0, 10.5);
+  return times;
+})();
+
+const SPEED_REFERENCE = 58;
+const ORB_CENTER = new THREE.Vector3(0, -1, 0);
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const WORLD_SIDE = new THREE.Vector3(0, 0, 1);
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function clamp01(value: number): number {
+  return clamp(value, 0, 1);
+}
+
+/**
+ * 🌠 OrbitalPhysicsEngine — Antigravity (/src/core)
+ *
+ * Chuyển mô phỏng sang timeline tuyệt đối 12.0 giây:
+ * 1. Act 1 (0 → 2s): sao chổi tích năng lượng tại quả cầu trung tâm,
+ *    đúng 2.0s phóng đi như một tia sáng.
+ * 2. Act 2 (2 → 7.5s): xuyên qua 14 ngôi sao trên các cung Bezier 3D mượt,
+ *    mỗi lần chạm phát STAR_LINKED và nối ConstellationEdge.
+ * 3. Act 3 (7.5 → 10.5s): 3 ngôi sao cuối, ghìm tốc độ tại ngôi áp chót (9.0s),
+ *    rồi ngoặt gắt lao dứt điểm về ngôi chiến thắng (10.5s).
+ * 4. Act 4 (10.5s): khóa mục tiêu, phát STAR_LOCKED_SUPERNOVA.
+ */
 export class OrbitalPhysicsEngine {
   private stars: StarNode[] = [];
   private edges: ConstellationEdge[] = [];
@@ -21,19 +70,34 @@ export class OrbitalPhysicsEngine {
 
   private isRunning = false;
   private route: number[] = [];
-  private routeIndex = 0;
-  private totalRouteSteps = 0;
+  private hitIndex = 0;
   private winnerStarId = -1;
+  private previousLinkedStarId = -1;
+
+  private cinematicActive = false;
+  private cinematicTime = 0;
+  private cinematicStartedAt = 0;
+  private launched = false;
+  private lastUpdateWall = performance.now();
+
+  private segmentStartTime = 0;
+  private segmentEndTime = 0;
+  private readonly segmentStart = new THREE.Vector3();
+  private readonly segmentControl1 = new THREE.Vector3();
+  private readonly segmentEndOffset = new THREE.Vector3();
+  private readonly lastEndTangent = new THREE.Vector3(1, 0, 0);
 
   // Danh sách các học sinh đã từng được chọn (đảm bảo không lặp lại)
-  private chosenWinnerIds: Set<number> = new Set();
+  private readonly chosenWinnerIds: Set<number> = new Set();
 
-  // Easing và điều khiển vận tốc giảm tốc dần (tinh chỉnh cho tiến trình nhanh & mượt)
-  private currentSpeed = 0;
-  private baseMaxSpeed = 150; // Tốc độ phóng cực nhanh ban đầu (đơn vị/giây)
-  private minSpeed = 26;      // Vận tốc lượn nhịp cuối chậm lại hồi hộp
-  private arrivalThreshold = 1.9;
-  private previousLinkedStarId = -1;
+  // Scratch vectors tái sử dụng mỗi frame
+  private readonly tmpToTarget = new THREE.Vector3();
+  private readonly tmpDirection = new THREE.Vector3();
+  private readonly tmpSide = new THREE.Vector3();
+  private readonly tmpLift = new THREE.Vector3();
+  private readonly tmpControl2 = new THREE.Vector3();
+  private readonly tmpBezier = new THREE.Vector3();
+  private readonly tmpVelocity = new THREE.Vector3();
 
   constructor() {
     this.initStars();
@@ -60,15 +124,17 @@ export class OrbitalPhysicsEngine {
     return this.isRunning;
   }
 
+  public getCinematicTime(): number {
+    return this.cinematicTime;
+  }
+
   /**
-   * Bắt đầu lộ trình dệt mạng lưới chòm sao giảm tốc dần
-   * Đảm bảo không lặp lại học sinh đã được chọn ở các vòng trước.
+   * Bắt đầu Kịch bản Điện ảnh 12 giây.
    * @param specifiedWinnerId Tùy chọn chỉ định ID ngôi sao chiến thắng (1 - 28)
    */
   public startWeaving(specifiedWinnerId?: number): boolean {
     if (this.isRunning) return false;
 
-    // Lọc danh sách học sinh chưa từng được chọn
     const unchosenStars = this.stars.filter((s) => !this.chosenWinnerIds.has(s.id));
     if (unchosenStars.length === 0) {
       console.warn('[OrbitalPhysicsEngine] Tất cả 28 học sinh đều đã được chọn!');
@@ -77,7 +143,6 @@ export class OrbitalPhysicsEngine {
 
     this.resetStateForNewRun();
 
-    // Chọn ngôi sao chiến thắng từ tập học sinh chưa được chọn
     if (specifiedWinnerId && !this.chosenWinnerIds.has(specifiedWinnerId)) {
       this.winnerStarId = specifiedWinnerId;
     } else {
@@ -85,69 +150,137 @@ export class OrbitalPhysicsEngine {
       this.winnerStarId = unchosenStars[randIdx].id;
     }
 
-    // Tạo lộ trình dệt ngẫu nhiên gồm 8 bước dệt nhanh và dứt khoát qua các ngôi sao
-    const numSteps = 8;
-    const availableIds = this.stars
-      .map((s) => s.id)
-      .filter((id) => id !== this.winnerStarId);
+    const winner = this.getStarById(this.winnerStarId);
+    if (!winner) return false;
 
-    // Shuffle mảng availableIds (Fisher-Yates)
-    for (let i = availableIds.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [availableIds[i], availableIds[j]] = [availableIds[j], availableIds[i]];
-    }
+    this.route = this.buildRoute(winner);
+    this.hitIndex = 0;
+    this.cinematicActive = true;
+    this.cinematicTime = 0;
+    this.cinematicStartedAt = performance.now();
+    this.launched = false;
 
-    this.route = availableIds.slice(0, numSteps - 1);
-    this.route.push(this.winnerStarId);
-    this.totalRouteSteps = this.route.length;
-    this.routeIndex = 0;
-
-    const firstStar = this.getStarById(this.route[0]);
-    if (firstStar) {
-      // Đặt sao chổi xuất phát từ ngoài không gian hoặc gần ngôi sao đầu tiên
-      const startOffset = new THREE.Vector3(
-        firstStar.currentPosition.x * 1.35,
-        firstStar.currentPosition.y + 10,
-        firstStar.currentPosition.z * 1.35
-      );
-      this.comet.position.copy(startOffset);
-      this.comet.velocity.set(0, 0, 0);
-      this.comet.targetStarId = firstStar.id;
-      this.comet.speedNormalized = 1.0;
-      this.comet.tailHistory = [startOffset.clone()];
-    }
+    this.comet.position.copy(ORB_CENTER);
+    this.comet.velocity.set(0, 0, 0);
+    this.comet.targetStarId = this.route[0];
+    this.comet.speedNormalized = 0;
+    this.comet.tailHistory = [];
+    this.previousLinkedStarId = -1;
 
     this.isRunning = true;
-    this.currentSpeed = this.baseMaxSpeed;
 
     cosmicEventBus.emit('WEAVE_START', {
       initialStarId: this.route[0],
-      totalSteps: this.totalRouteSteps,
+      totalSteps: this.route.length,
       timestamp: performance.now(),
     });
 
     console.log(
-      `[OrbitalPhysicsEngine] Bắt đầu dệt chòm sao: ${this.totalRouteSteps} bước. Winner Star: #${this.winnerStarId}`
+      `[OrbitalPhysicsEngine] 🎬 Cinematic 12s bắt đầu: ${this.route.length} điểm chạm, ` +
+        `winner #${this.winnerStarId} "${winner.studentName}".`
     );
     return true;
   }
 
+  /* ================================================================== */
+  /* Chọn lộ trình                                                       */
+  /* ================================================================== */
+
+  private buildRoute(winner: StarNode): number[] {
+    const others = this.stars.filter((s) => s.id !== winner.id);
+
+    // Hai ngôi sao cuối (trước winner) chọn gần winner để cụm 3 sao
+    // cuối cùng tạo thành tâm điểm quay của Act 3.
+    const nearPool = others
+      .slice()
+      .sort(
+        (a, b) =>
+          a.currentPosition.distanceToSquared(winner.currentPosition) -
+          b.currentPosition.distanceToSquared(winner.currentPosition)
+      )
+      .slice(0, Math.min(7, others.length));
+    const finaleStars = this.pickRandom(nearPool, 2);
+    const finaleIds = new Set(finaleStars.map((s) => s.id));
+
+    const act2Pool = others.filter((s) => !finaleIds.has(s.id));
+
+    // Ưu tiên các ngôi sao phía trên sàn đài để màn rượt đuổi diễn ra
+    // giữa tinh hà thay vì lao xuống dưới mặt cẩm thạch.
+    let routePool = act2Pool.filter((s) => s.currentPosition.y > -8);
+    if (routePool.length < ACT2_VISIT_COUNT) {
+      routePool = act2Pool
+        .slice()
+        .sort((a, b) => b.currentPosition.y - a.currentPosition.y)
+        .slice(0, ACT2_VISIT_COUNT);
+    }
+
+    const act2Stars = this.orderForChase(this.pickRandom(routePool, ACT2_VISIT_COUNT));
+
+    return [
+      ...act2Stars.map((s) => s.id),
+      ...finaleStars.map((s) => s.id),
+      winner.id,
+    ];
+  }
+
+  private pickRandom(pool: StarNode[], count: number): StarNode[] {
+    const copy = pool.slice();
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, Math.min(count, copy.length));
+  }
+
   /**
-   * Cập nhật chuyển động vật lý từng frame
+   * Sắp xếp 14 ngôi sao Act 2 theo bước nhảy gần (có yếu tố ngẫu nhiên)
+   * để tốc độ tia sáng vừa bay lượn liên tục vừa quét được nhiều vùng trời.
    */
+  private orderForChase(pool: StarNode[]): StarNode[] {
+    const remaining = pool.slice();
+    if (remaining.length === 0) return remaining;
+
+    const ordered: StarNode[] = [];
+    let current = remaining.splice(Math.floor(Math.random() * remaining.length), 1)[0];
+    ordered.push(current);
+
+    while (remaining.length > 0) {
+      remaining.sort(
+        (a, b) =>
+          a.currentPosition.distanceToSquared(current.currentPosition) -
+          b.currentPosition.distanceToSquared(current.currentPosition)
+      );
+      const poolSize = Math.min(4, remaining.length);
+      const pickIndex = Math.random() < 0.72 ? 0 : Math.floor(Math.random() * poolSize);
+      current = remaining.splice(pickIndex, 1)[0];
+      ordered.push(current);
+    }
+
+    return ordered;
+  }
+
+  /* ================================================================== */
+  /* Vòng cập nhật                                                       */
+  /* ================================================================== */
+
   public update(dt: number, elapsed: number): void {
     const safeDt = Math.min(dt, 0.05);
+    const now = performance.now();
+    const wallDt = Math.min(
+      0.12,
+      Math.max(1e-4, (now - this.lastUpdateWall) / 1000)
+    );
+    this.lastUpdateWall = now;
 
-    // 1. Cập nhật quỹ đạo vi sai của 28 ngôi sao
+    // 1. Quỹ đạo vi sai của 28 ngôi sao
     for (const star of this.stars) {
       updateStarOrbit(star, elapsed);
-      // Giảm độ sáng sau cú boost
       if (star.brightness > 1.0 && !star.isWinner) {
         star.brightness = Math.max(1.0, star.brightness - safeDt * 1.8);
       }
     }
 
-    // 2. Cập nhật tọa độ các cạnh đường nối chòm sao bám theo quỹ đạo ngôi sao
+    // 2. Cạnh chòm sao bám theo vị trí sao
     for (const edge of this.edges) {
       const s1 = this.getStarById(edge.fromStarId);
       const s2 = this.getStarById(edge.toStarId);
@@ -157,75 +290,206 @@ export class OrbitalPhysicsEngine {
       }
     }
 
-    // 3. Mô phỏng vật lý Sao Chổi khi đang dệt
-    if (this.isRunning && this.routeIndex < this.route.length) {
-      this.simulateCometStep(safeDt, elapsed);
+    // 3. Timeline điện ảnh — dùng đồng hồ thực để luôn đúng 12.0 giây
+    // kể cả khi FPS dao động hoặc trình duyệt bị giật khung hình.
+    if (this.cinematicActive) {
+      this.cinematicTime = Math.max(
+        0,
+        (now - this.cinematicStartedAt) / 1000
+      );
+      this.updateCinematic(wallDt, elapsed);
     }
 
-    // 4. Phát COMET_STEP frame event
+    // 4. Frame event
     cosmicEventBus.emit('COMET_STEP', {
       comet: this.comet,
       edges: this.edges,
       elapsed,
-      dt: safeDt,
+      dt: wallDt,
     });
   }
 
-  private simulateCometStep(dt: number, elapsed: number): void {
-    const targetStarId = this.route[this.routeIndex];
-    const targetStar = this.getStarById(targetStarId);
-    if (!targetStar) return;
+  private updateCinematic(dt: number, elapsed: number): void {
+    // Act 1: tích năng lượng tại quả cầu trung tâm.
+    if (this.cinematicTime < ACT1_LAUNCH) {
+      this.comet.position.copy(ORB_CENTER);
+      this.comet.velocity.set(0, 0, 0);
+      this.comet.targetStarId = this.route[0] ?? -1;
+      this.comet.speedNormalized = 0;
+      return;
+    }
 
-    const targetPos = targetStar.currentPosition;
-    const toTarget = new THREE.Vector3().subVectors(targetPos, this.comet.position);
-    const distance = toTarget.length();
+    // Đúng 2.0s: phóng tia sáng khỏi quả cầu.
+    if (!this.launched) {
+      this.launched = true;
+      this.beginSegment(0);
+    }
 
-    // Tính toán tốc độ giảm tốc dần theo tiến độ lộ trình (Exponential / Deceleration Easing)
-    // progress: 0.0 (mới xuất phát) -> 1.0 (chạm ngôi sao chiến thắng)
-    const progress = (this.routeIndex + Math.max(0, 1 - distance / 15)) / this.totalRouteSteps;
-    const clampedProgress = Math.max(0, Math.min(1, progress));
+    // Xử lý các mốc chạm sao đã đi qua trong frame này.
+    let guard = 0;
+    while (
+      this.hitIndex < this.route.length &&
+      this.cinematicTime >= HIT_TIMES[this.hitIndex] &&
+      guard < this.route.length
+    ) {
+      const star = this.getStarById(this.route[this.hitIndex]);
+      if (!star) break;
 
-    // Đường cong giảm tốc: Tốc độ giảm dần đều từ baseMaxSpeed xuống minSpeed
-    const speedDecay = Math.pow(1 - clampedProgress, 1.4);
-    this.currentSpeed = this.minSpeed + (this.baseMaxSpeed - this.minSpeed) * speedDecay;
+      this.comet.position.copy(star.currentPosition);
+      this.pushTail();
+      this.onStarReached(star, elapsed, this.hitIndex);
 
-    // Chuẩn hóa speedNormalized (1.0 -> 0.05)
-    this.comet.speedNormalized = Math.max(0.05, this.currentSpeed / this.baseMaxSpeed);
+      this.hitIndex += 1;
+      if (!this.isRunning || this.hitIndex >= this.route.length) return;
 
-    // Tính lực lái chuyển hướng mượt mà (Steering / Smooth Pursuit with Inertia)
-    toTarget.normalize();
-    const desiredVelocity = toTarget.multiplyScalar(this.currentSpeed);
+      this.beginSegment(this.hitIndex);
+      guard += 1;
+    }
 
-    // Thêm lực xoáy cung nhẹ (Arc bias) để sao chổi bay lượn hình vòng cung không gian
-    const arcAxis = new THREE.Vector3(0, 1, 0);
-    const arcVector = new THREE.Vector3().crossVectors(desiredVelocity, arcAxis).normalize();
-    const arcStrength = Math.sin(elapsed * 5 + this.routeIndex) * (this.currentSpeed * 0.12);
-    desiredVelocity.addScaledVector(arcVector, arcStrength);
+    if (!this.isRunning || this.hitIndex >= this.route.length) return;
 
-    // Quán tính: Damped interpolation cho vận tốc lượn nhanh & dứt khoát
-    const steerSharpness = Math.min(1, dt * 14.0);
-    this.comet.velocity.lerp(desiredVelocity, steerSharpness);
+    const segmentIndex = this.hitIndex;
+    const target = this.getStarById(this.route[segmentIndex]);
+    if (!target) return;
 
-    // Cập nhật vị trí
-    this.comet.position.addScaledVector(this.comet.velocity, dt);
+    const span = Math.max(1e-3, this.segmentEndTime - this.segmentStartTime);
+    const progress = clamp01((this.cinematicTime - this.segmentStartTime) / span);
+    const eased = this.segmentEasing(segmentIndex, progress);
 
-    // Lưu lại lịch sử đuôi sao chổi (Tail Ribbon History)
+    // Điểm cuối bám theo quỹ đạo sống của ngôi sao đích.
+    this.tmpControl2.copy(target.currentPosition).sub(this.segmentEndOffset);
+    this.computeBezier(
+      this.segmentStart,
+      this.segmentControl1,
+      this.tmpControl2,
+      target.currentPosition,
+      eased,
+      this.tmpBezier
+    );
+
+    this.updateCometMotion(this.tmpBezier, dt);
+    this.comet.targetStarId = target.id;
+  }
+
+  private segmentEasing(segmentIndex: number, progress: number): number {
+    const p = clamp01(progress);
+
+    // Cú lao cuối: khởi đầu gần như đứng yên (fake-out), rồi tăng tốc dữ dội.
+    if (segmentIndex === this.route.length - 1) {
+      return Math.pow(p, 2.35);
+    }
+
+    // Đoạn tới ngôi áp chót: bay nhanh rồi ghìm dần, gần như dừng tại 9.0s.
+    if (segmentIndex === this.route.length - 2) {
+      return 1 - Math.pow(1 - p, 3.2);
+    }
+
+    return p;
+  }
+
+  private beginSegment(index: number): void {
+    const target = this.getStarById(this.route[index]);
+    if (!target) return;
+
+    this.segmentStartTime = index === 0 ? ACT1_LAUNCH : HIT_TIMES[index - 1];
+    this.segmentEndTime = HIT_TIMES[index];
+    this.segmentStart.copy(this.comet.position);
+
+    this.tmpToTarget.subVectors(target.currentPosition, this.segmentStart);
+    const distance = Math.max(0.001, this.tmpToTarget.length());
+    const direct = this.tmpDirection.copy(this.tmpToTarget).divideScalar(distance);
+
+    // Nối tiếp tuyến mượt với cung trước.
+    const outDirection =
+      index === 0
+        ? direct
+        : this.tmpLift.copy(this.lastEndTangent).lerp(direct, 0.42).normalize();
+
+    this.tmpSide.crossVectors(outDirection, WORLD_UP);
+    if (this.tmpSide.lengthSq() < 1e-4) {
+      this.tmpSide.crossVectors(outDirection, WORLD_SIDE);
+    }
+    this.tmpSide.normalize();
+
+    const lateralSign = index % 2 === 0 ? 1 : -1;
+    const arc = lateralSign * (1.8 + distance * 0.075);
+    const lift = Math.sin(index * 1.7) * (0.8 + distance * 0.035);
+
+    if (index === this.route.length - 1) {
+      // Fake-out: mồi lệch sang bên rồi ngoặt gắt về winner.
+      this.segmentControl1
+        .copy(this.segmentStart)
+        .addScaledVector(direct, distance * 0.16)
+        .addScaledVector(this.tmpSide, distance * 0.24 * lateralSign)
+        .addScaledVector(WORLD_UP, distance * 0.06);
+
+      this.tmpControl2
+        .copy(target.currentPosition)
+        .addScaledVector(direct, -distance * 0.24)
+        .addScaledVector(this.tmpSide, distance * 0.07);
+    } else {
+      this.segmentControl1
+        .copy(this.segmentStart)
+        .addScaledVector(outDirection, distance * 0.3)
+        .addScaledVector(this.tmpSide, arc)
+        .addScaledVector(WORLD_UP, lift);
+
+      this.tmpControl2
+        .copy(target.currentPosition)
+        .addScaledVector(direct, -distance * 0.28)
+        .addScaledVector(this.tmpSide, arc * 0.35);
+    }
+
+    // Lưu offset của control2 so với điểm cuối để nó bám theo sao đang quay.
+    this.segmentEndOffset.subVectors(target.currentPosition, this.tmpControl2);
+    this.lastEndTangent.copy(this.segmentEndOffset).normalize();
+  }
+
+  private computeBezier(
+    p0: THREE.Vector3,
+    p1: THREE.Vector3,
+    p2: THREE.Vector3,
+    p3: THREE.Vector3,
+    t: number,
+    out: THREE.Vector3
+  ): void {
+    const u = 1 - t;
+    const uu = u * u;
+    const tt = t * t;
+    out.set(
+      uu * u * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + tt * t * p3.x,
+      uu * u * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + tt * t * p3.y,
+      uu * u * p0.z + 3 * uu * t * p1.z + 3 * u * tt * p2.z + tt * t * p3.z
+    );
+  }
+
+  private updateCometMotion(nextPosition: THREE.Vector3, dt: number): void {
+    const safeDt = Math.max(dt, 1e-4);
+    this.tmpVelocity.subVectors(nextPosition, this.comet.position).divideScalar(safeDt);
+    const rawSpeed = this.tmpVelocity.length();
+
+    this.comet.velocity.lerp(this.tmpVelocity, 1 - Math.exp(-safeDt * 18));
+    this.comet.position.copy(nextPosition);
+    this.comet.speedNormalized = clamp(rawSpeed / SPEED_REFERENCE, 0.05, 1);
+    this.pushTail();
+  }
+
+  private pushTail(): void {
+    const head = this.comet.tailHistory[0];
+    if (head && head.distanceToSquared(this.comet.position) < 0.012) {
+      return;
+    }
     this.comet.tailHistory.unshift(this.comet.position.clone());
     if (this.comet.tailHistory.length > CELESTIAL_CONSTANTS.MAX_TAIL_LENGTH) {
       this.comet.tailHistory.pop();
     }
-
-    // Kiểm tra đã chạm đích tới ngôi sao mục tiêu chưa
-    if (distance <= this.arrivalThreshold) {
-      this.onStarReached(targetStar, elapsed);
-    }
   }
 
-  private onStarReached(star: StarNode, elapsed: number): void {
+  private onStarReached(star: StarNode, elapsed: number, index: number): void {
+    const isWinner = index >= this.route.length - 1;
     star.isVisited = true;
-    star.brightness = 2.4; // Flash sáng chói tức thì
+    star.brightness = Math.max(star.brightness, isWinner ? 4.2 : 2.7);
 
-    // Tạo tia sáng kết nối từ ngôi sao trước đó tới ngôi sao này
     if (this.previousLinkedStarId !== -1 && this.previousLinkedStarId !== star.id) {
       const prevStar = this.getStarById(this.previousLinkedStarId);
       if (prevStar) {
@@ -242,41 +506,42 @@ export class OrbitalPhysicsEngine {
 
     this.previousLinkedStarId = star.id;
 
-    // Phát sự kiện STAR_LINKED
     cosmicEventBus.emit('STAR_LINKED', {
       starId: star.id,
       position: star.currentPosition.clone(),
-      stepIndex: this.routeIndex + 1,
+      stepIndex: index + 1,
       speedNormalized: this.comet.speedNormalized,
     });
 
-    this.routeIndex++;
-
-    // Kiểm tra xem đã hoàn thành toàn bộ lộ trình dệt chưa (chạm Winner Star)
-    if (this.routeIndex >= this.route.length) {
-      this.onWeaveComplete(star);
-    } else {
-      this.comet.targetStarId = this.route[this.routeIndex];
+    if (isWinner) {
+      this.finishRun(star);
     }
   }
 
-  private onWeaveComplete(winnerStar: StarNode): void {
+  private finishRun(winner: StarNode): void {
     this.isRunning = false;
-    this.chosenWinnerIds.add(winnerStar.id);
-    winnerStar.isWinner = true;
-    winnerStar.brightness = 3.5;
-    this.comet.speedNormalized = 0;
+    this.cinematicActive = false;
+    this.chosenWinnerIds.add(winner.id);
+    winner.isWinner = true;
+    winner.brightness = 4.2;
+    this.comet.targetStarId = winner.id;
     this.comet.velocity.set(0, 0, 0);
+    this.comet.speedNormalized = 0;
 
     console.log(
-      `🌟 [OrbitalPhysicsEngine] Khóa mục tiêu Supernova: "${winnerStar.studentName}" (#${winnerStar.id})! Đã chọn: ${this.chosenWinnerIds.size}/${this.stars.length}`
+      `🌟 [OrbitalPhysicsEngine] Khóa mục tiêu Supernova lúc ${this.cinematicTime.toFixed(2)}s: ` +
+        `"${winner.studentName}" (#${winner.id}) — ${this.chosenWinnerIds.size}/${this.stars.length}`
     );
 
     cosmicEventBus.emit('STAR_LOCKED_SUPERNOVA', {
-      winnerStar,
-      position: winnerStar.currentPosition.clone(),
+      winnerStar: winner,
+      position: winner.currentPosition.clone(),
     });
   }
+
+  /* ================================================================== */
+  /* Reset & truy vấn                                                    */
+  /* ================================================================== */
 
   public getChosenWinnerIds(): Set<number> {
     return this.chosenWinnerIds;
@@ -315,16 +580,18 @@ export class OrbitalPhysicsEngine {
 
   private resetStateForNewRun(): void {
     this.isRunning = false;
+    this.cinematicActive = false;
+    this.cinematicTime = 0;
+    this.launched = false;
     this.route = [];
-    this.routeIndex = 0;
-    this.totalRouteSteps = 0;
+    this.hitIndex = 0;
     this.winnerStarId = -1;
     this.previousLinkedStarId = -1;
-    this.currentSpeed = 0;
+    this.segmentStartTime = 0;
+    this.segmentEndTime = 0;
   }
 
   public getStarById(id: number): StarNode | undefined {
     return this.stars.find((s) => s.id === id);
   }
 }
-

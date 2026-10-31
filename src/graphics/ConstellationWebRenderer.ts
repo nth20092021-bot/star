@@ -2,10 +2,37 @@ import * as THREE from 'three';
 import type { StarNode, CometPhysicsState, ConstellationEdge } from '../shared/CosmicTypes';
 import { CELESTIAL_CONSTANTS } from '../shared/CosmicTypes';
 import { clamp, damp, hash01, disposeObjectTree } from './GraphicsUtils';
+import { createHologramNameTexture } from './VisualTextures';
 
 const MAX_STARS = CELESTIAL_CONSTANTS.TOTAL_STARS;
 const MAX_EDGES = 128;
 const TAIL_MAX = CELESTIAL_CONSTANTS.MAX_TAIL_LENGTH;
+const MAX_RENDERED_TAIL = 6.5;
+const PULSE_POOL_SIZE = 12;
+const HOLOGRAM_POOL_SIZE = 6;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
+function smoothStep(edge0: number, edge1: number, value: number): number {
+  const t = clamp((value - edge0) / Math.max(1e-5, edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+interface StarPulseEffect {
+  mesh: THREE.Mesh;
+  material: THREE.ShaderMaterial;
+  startedAt: number;
+  duration: number;
+  active: boolean;
+}
+
+interface NameHologram {
+  sprite: THREE.Sprite;
+  material: THREE.SpriteMaterial;
+  startedAt: number;
+  duration: number;
+  active: boolean;
+  basePosition: THREE.Vector3;
+}
 
 interface StarSystem {
   points: THREE.Points;
@@ -30,6 +57,7 @@ interface EdgeSystem {
   positionAttr: THREE.BufferAttribute;
   intensityAttr: THREE.BufferAttribute;
   seedAttr: THREE.BufferAttribute;
+  flowDirAttr: THREE.BufferAttribute;
 }
 
 /**
@@ -47,6 +75,15 @@ export class ConstellationWebRenderer {
   private readonly edgeStartedAt = new Map<string, number>();
   private lastStarCount = 0;
 
+  private readonly pulseEffects: StarPulseEffect[] = [];
+  private pulseCursor = 0;
+  private readonly holograms: NameHologram[] = [];
+  private hologramCursor = 0;
+  private readonly hologramTextures = new Map<string, THREE.CanvasTexture>();
+  private surgeActive = false;
+  private surgeAge = 0;
+  private readonly surgeWinnerPosition = new THREE.Vector3();
+
   private readonly cometGroup = new THREE.Group();
   private readonly cometHeadMaterial: THREE.ShaderMaterial;
   private readonly headPositionAttr: THREE.BufferAttribute;
@@ -63,6 +100,7 @@ export class ConstellationWebRenderer {
   private readonly tailSamples: THREE.Vector3[] = [];
   private readonly tailCurve = new THREE.CatmullRomCurve3([], false, 'centripetal');
   private readonly fallbackTailPoint = new THREE.Vector3();
+  private readonly tailCapPoint = new THREE.Vector3();
 
   // Scratch vectors tái sử dụng mỗi frame (không cấp phát trong vòng lặp nóng)
   private readonly tmpTangent = new THREE.Vector3();
@@ -85,7 +123,7 @@ export class ConstellationWebRenderer {
     const headPosition = new THREE.BufferAttribute(new Float32Array(3), 3);
     headPosition.setUsage(THREE.DynamicDrawUsage);
     headGeometry.setAttribute('position', headPosition);
-    headGeometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array([12.5]), 1));
+    headGeometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array([9.0]), 1));
     headGeometry.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array([0.37]), 1));
 
     this.cometHeadMaterial = new THREE.ShaderMaterial({
@@ -205,6 +243,78 @@ export class ConstellationWebRenderer {
 
     this.cometGroup.visible = false;
     this.group.add(this.cometGroup);
+
+    this.createStarPulsePool();
+    this.createNameHologramPool();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Pool hiệu ứng va chạm sao                                           */
+  /* ------------------------------------------------------------------ */
+
+  private createStarPulsePool(): void {
+    for (let i = 0; i < PULSE_POOL_SIZE; i += 1) {
+      const material = new THREE.ShaderMaterial({
+        name: 'StarHitPulse',
+        uniforms: {
+          uProgress: { value: 0 },
+          uAlpha: { value: 0 },
+          uColor: { value: new THREE.Color(1.2, 0.9, 0.48) },
+        },
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        vertexShader: STAR_PULSE_VERTEX,
+        fragmentShader: STAR_PULSE_FRAGMENT,
+      });
+
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+      mesh.name = `StarHitPulse_${i}`;
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 9;
+      this.group.add(mesh);
+
+      this.pulseEffects.push({
+        mesh,
+        material,
+        startedAt: 0,
+        duration: 0.9,
+        active: false,
+      });
+    }
+  }
+
+  private createNameHologramPool(): void {
+    for (let i = 0; i < HOLOGRAM_POOL_SIZE; i += 1) {
+      const material = new THREE.SpriteMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false,
+      });
+
+      const sprite = new THREE.Sprite(material);
+      sprite.name = `StudentNameHologram_${i}`;
+      sprite.visible = false;
+      sprite.frustumCulled = false;
+      sprite.renderOrder = 14;
+      this.group.add(sprite);
+
+      this.holograms.push({
+        sprite,
+        material,
+        startedAt: 0,
+        duration: 1.15,
+        active: false,
+        basePosition: new THREE.Vector3(),
+      });
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -337,17 +447,23 @@ export class ConstellationWebRenderer {
     intensityAttr.setUsage(THREE.DynamicDrawUsage);
     const seedAttr = new THREE.BufferAttribute(new Float32Array(MAX_EDGES * 2), 1);
     seedAttr.setUsage(THREE.DynamicDrawUsage);
+    const flowDirAttr = new THREE.BufferAttribute(new Float32Array(MAX_EDGES * 2), 1);
+    flowDirAttr.setUsage(THREE.DynamicDrawUsage);
 
     geometry.setAttribute('position', positionAttr);
     geometry.setAttribute('aT', new THREE.BufferAttribute(tValues, 1));
     geometry.setAttribute('aIntensity', intensityAttr);
     geometry.setAttribute('aSeed', seedAttr);
+    geometry.setAttribute('aFlowDir', flowDirAttr);
     geometry.setDrawRange(0, 0);
 
     const material = new THREE.ShaderMaterial({
       name: 'ConstellationEdgeEnergy',
       uniforms: {
         uTime: { value: 0 },
+        uSurge: { value: 0 },
+        uSurgeProgress: { value: 0 },
+        uSurgeFlash: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -362,7 +478,15 @@ export class ConstellationWebRenderer {
     lines.renderOrder = 5;
     this.group.add(lines);
 
-    return { lines, geometry, material, positionAttr, intensityAttr, seedAttr };
+    return {
+      lines,
+      geometry,
+      material,
+      positionAttr,
+      intensityAttr,
+      seedAttr,
+      flowDirAttr,
+    };
   }
 
   private updateEdges(elapsed: number, edges: ConstellationEdge[]): void {
@@ -371,6 +495,7 @@ export class ConstellationWebRenderer {
     const positions = system.positionAttr.array as Float32Array;
     const intensities = system.intensityAttr.array as Float32Array;
     const seeds = system.seedAttr.array as Float32Array;
+    const flowDirs = system.flowDirAttr.array as Float32Array;
 
     for (let i = 0; i < count; i += 1) {
       const edge = edges[i];
@@ -398,6 +523,19 @@ export class ConstellationWebRenderer {
       const seed = hash01(edge.fromStarId * 31.7 + edge.toStarId * 17.3);
       seeds[i * 2] = seed;
       seeds[i * 2 + 1] = seed;
+
+      // +1: năng lượng chạy từ start → end; -1: ngược lại.
+      // Hướng luôn quy về phía ngôi sao chiến thắng khi surge Act 4.
+      let flow = 1;
+      if (this.surgeActive) {
+        flow =
+          edge.startPos.distanceToSquared(this.surgeWinnerPosition) >
+          edge.endPos.distanceToSquared(this.surgeWinnerPosition)
+            ? 1
+            : -1;
+      }
+      flowDirs[i * 2] = flow;
+      flowDirs[i * 2 + 1] = flow;
     }
 
     system.lines.visible = count > 0;
@@ -406,6 +544,7 @@ export class ConstellationWebRenderer {
       system.positionAttr.needsUpdate = true;
       system.intensityAttr.needsUpdate = true;
       system.seedAttr.needsUpdate = true;
+      system.flowDirAttr.needsUpdate = true;
     }
   }
 
@@ -464,12 +603,28 @@ export class ConstellationWebRenderer {
       const last = history[history.length - 1];
       const firstIsCloser = first.distanceToSquared(headPosition) <= last.distanceToSquared(headPosition);
 
+      let tailDistance = 0;
       for (let i = 0; i < history.length; i += 1) {
         const source = history[firstIsCloser ? i : history.length - 1 - i];
         const previous = this.tailSource[this.tailSource.length - 1];
-        if (source.distanceToSquared(previous) > 0.012) {
-          this.tailSource.push(source);
+        const segmentLength = source.distanceTo(previous);
+        if (segmentLength < 0.08) continue;
+
+        // Giới hạn đuôi hiển thị ~7.5 đơn vị để camera bám đuôi (8–14)
+        // không bao giờ bay xuyên qua dải ribbon.
+        if (tailDistance + segmentLength >= MAX_RENDERED_TAIL) {
+          const remaining = MAX_RENDERED_TAIL - tailDistance;
+          if (remaining > 0.12) {
+            this.tailCapPoint
+              .copy(previous)
+              .lerp(source, remaining / segmentLength);
+            this.tailSource.push(this.tailCapPoint);
+          }
+          break;
         }
+
+        this.tailSource.push(source);
+        tailDistance += segmentLength;
       }
     }
 
@@ -523,7 +678,7 @@ export class ConstellationWebRenderer {
       }
 
       const taper = Math.pow(1 - t, 1.5);
-      const width = (0.7 * taper + 0.04) * (0.7 + speed * 0.55);
+      const width = (0.44 * taper + 0.03) * (0.7 + speed * 0.5);
       const base = i * 6;
 
       tailPositions[base] = center.x + this.tmpSide.x * width;
@@ -549,8 +704,140 @@ export class ConstellationWebRenderer {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Hiệu ứng va chạm sao & luồng năng lượng                             */
+  /* ------------------------------------------------------------------ */
+
+  private updateStarPulses(camera: THREE.Camera): void {
+    const now = performance.now();
+
+    for (const pulse of this.pulseEffects) {
+      if (!pulse.active) continue;
+
+      const age = Math.max(0, (now - pulse.startedAt) / 1000);
+      const progress = clamp(age / pulse.duration, 0, 1);
+
+      pulse.mesh.quaternion.copy(camera.quaternion);
+      pulse.mesh.scale.setScalar(2.2 + age * 9.0);
+      pulse.material.uniforms.uProgress.value = progress;
+      pulse.material.uniforms.uAlpha.value = Math.sin(progress * Math.PI) * 0.95;
+
+      if (age >= pulse.duration) {
+        pulse.active = false;
+        pulse.mesh.visible = false;
+      }
+    }
+  }
+
+  private updateNameHolograms(camera: THREE.Camera): void {
+    const now = performance.now();
+
+    for (const holo of this.holograms) {
+      if (!holo.active) continue;
+
+      const age = Math.max(0, (now - holo.startedAt) / 1000);
+      const fadeIn = smoothStep(0, 0.14, age);
+      const fadeOut = 1 - smoothStep(holo.duration * 0.58, holo.duration, age);
+      holo.material.opacity = fadeIn * fadeOut;
+
+      holo.sprite.position
+        .copy(holo.basePosition)
+        .addScaledVector(WORLD_UP, 1.55 + age * 0.55);
+
+      const distance = camera.position.distanceTo(holo.sprite.position);
+      const width = clamp(distance * 0.27, 2.8, 8.0);
+      holo.sprite.scale.set(width, width * 0.25, 1);
+
+      if (age >= holo.duration) {
+        holo.active = false;
+        holo.sprite.visible = false;
+        holo.material.opacity = 0;
+      }
+    }
+  }
+
+  private updateEnergySurge(dt: number): void {
+    if (!this.surgeActive) return;
+
+    this.surgeAge += dt;
+    const uniforms = this.edgeSystem.material.uniforms;
+    uniforms.uSurgeProgress.value = clamp(this.surgeAge / 0.78, 0, 1);
+    uniforms.uSurgeFlash.value = Math.exp(-this.surgeAge * 2.2);
+    uniforms.uSurge.value = 1 - smoothStep(2.2, 3.4, this.surgeAge);
+
+    if (this.surgeAge > 3.4) {
+      this.surgeActive = false;
+      uniforms.uSurge.value = 0;
+      uniforms.uSurgeFlash.value = 0;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
   /* API công khai                                                       */
   /* ------------------------------------------------------------------ */
+
+  public triggerStarPulse(position: THREE.Vector3, seed: number): void {
+    if (this.pulseEffects.length === 0) return;
+
+    const pulse = this.pulseEffects[this.pulseCursor % this.pulseEffects.length];
+    this.pulseCursor += 1;
+
+    const gold = Math.abs(Math.floor(seed)) % 2 === 0;
+    pulse.active = true;
+    pulse.startedAt = performance.now();
+    pulse.mesh.visible = true;
+    pulse.mesh.position.copy(position);
+    pulse.material.uniforms.uProgress.value = 0;
+    pulse.material.uniforms.uAlpha.value = 0;
+    (pulse.material.uniforms.uColor.value as THREE.Color).setRGB(
+      gold ? 1.3 : 0.42,
+      gold ? 0.88 : 0.98,
+      gold ? 0.46 : 1.25
+    );
+  }
+
+  public showStudentHologram(
+    studentName: string,
+    position: THREE.Vector3,
+    seed: number
+  ): void {
+    if (this.holograms.length === 0) return;
+
+    const cleanName = (studentName || '').normalize('NFC');
+    let texture = this.hologramTextures.get(cleanName);
+    if (!texture) {
+      texture = createHologramNameTexture(cleanName);
+      this.hologramTextures.set(cleanName, texture);
+    }
+
+    const slot = this.holograms[this.hologramCursor % this.holograms.length];
+    this.hologramCursor += 1;
+
+    slot.active = true;
+    slot.startedAt = performance.now();
+    slot.duration = 1.15;
+    slot.basePosition.copy(position);
+    slot.sprite.position.copy(position);
+    slot.sprite.visible = true;
+    slot.material.map = texture;
+    slot.material.opacity = 0;
+    slot.material.color.setRGB(
+      Math.abs(Math.floor(seed)) % 3 === 0 ? 1.02 : 0.78,
+      0.94,
+      1.02
+    );
+    slot.material.needsUpdate = true;
+  }
+
+  public triggerEnergySurge(winnerPosition: THREE.Vector3): void {
+    this.surgeActive = true;
+    this.surgeAge = 0;
+    this.surgeWinnerPosition.copy(winnerPosition);
+
+    const uniforms = this.edgeSystem.material.uniforms;
+    uniforms.uSurge.value = 1;
+    uniforms.uSurgeProgress.value = 0;
+    uniforms.uSurgeFlash.value = 1;
+  }
 
   public setPixelRatio(pixelRatio: number): void {
     const ratio = Math.max(1, pixelRatio);
@@ -571,6 +858,9 @@ export class ConstellationWebRenderer {
     this.updateStars(dt, stars);
     this.updateEdges(elapsed, edges);
     this.updateComet(dt, elapsed, comet, camera);
+    this.updateStarPulses(camera);
+    this.updateNameHolograms(camera);
+    this.updateEnergySurge(dt);
 
     this.starSystem.material.uniforms.uTime.value = elapsed;
     this.edgeSystem.material.uniforms.uTime.value = elapsed;
@@ -579,10 +869,15 @@ export class ConstellationWebRenderer {
     this.sparkleMaterial.uniforms.uTime.value = elapsed;
   }
 
-  /** Cho sao chổi tan biến nhanh khi vụ nổ Supernova bắt đầu. */
+  /** Cho sao chổi tan biến ngay khi vụ nổ Supernova bắt đầu. */
   public fadeOutComet(): void {
     this.forceHideComet = true;
     this.lastCometActiveAt = Number.NEGATIVE_INFINITY;
+    this.cometVisibility = 0;
+    this.cometGroup.visible = false;
+    this.cometLight.intensity = 0;
+    this.tailGeometry.setDrawRange(0, 0);
+    this.sparkles.geometry.setDrawRange(0, 0);
   }
 
   public reset(): void {
@@ -610,9 +905,36 @@ export class ConstellationWebRenderer {
     this.tailGeometry.setDrawRange(0, 0);
     this.sparkles.geometry.setDrawRange(0, 0);
     this.headPositionAttr.needsUpdate = true;
+
+    for (const pulse of this.pulseEffects) {
+      pulse.active = false;
+      pulse.startedAt = 0;
+      pulse.mesh.visible = false;
+      pulse.material.uniforms.uAlpha.value = 0;
+    }
+    this.pulseCursor = 0;
+
+    for (const holo of this.holograms) {
+      holo.active = false;
+      holo.startedAt = 0;
+      holo.material.opacity = 0;
+      holo.sprite.visible = false;
+    }
+    this.hologramCursor = 0;
+
+    this.surgeActive = false;
+    this.surgeAge = 0;
+    const surgeUniforms = this.edgeSystem.material.uniforms;
+    surgeUniforms.uSurge.value = 0;
+    surgeUniforms.uSurgeProgress.value = 0;
+    surgeUniforms.uSurgeFlash.value = 0;
   }
 
   public dispose(): void {
+    for (const texture of this.hologramTextures.values()) {
+      texture.dispose();
+    }
+    this.hologramTextures.clear();
     disposeObjectTree(this.group);
   }
 }
@@ -705,25 +1027,32 @@ const EDGE_VERTEX = /* glsl */ `
   attribute float aT;
   attribute float aIntensity;
   attribute float aSeed;
+  attribute float aFlowDir;
 
   varying float vT;
   varying float vIntensity;
   varying float vSeed;
+  varying float vFlowDir;
 
   void main() {
     vT = aT;
     vIntensity = aIntensity;
     vSeed = aSeed;
+    vFlowDir = aFlowDir;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
 const EDGE_FRAGMENT = /* glsl */ `
   uniform float uTime;
+  uniform float uSurge;
+  uniform float uSurgeProgress;
+  uniform float uSurgeFlash;
 
   varying float vT;
   varying float vIntensity;
   varying float vSeed;
+  varying float vFlowDir;
 
   void main() {
     float pulse = 0.55 + 0.45 * sin(vT * 14.0 - uTime * 5.2 + vSeed * 6.2831);
@@ -733,7 +1062,18 @@ const EDGE_FRAGMENT = /* glsl */ `
     vec3 gold = vec3(1.0, 0.78, 0.36);
     vec3 color = mix(cyan, gold, smoothstep(0.0, 1.0, vT));
 
-    float brightness = vIntensity * (0.85 + 0.7 * pulse + 1.4 * travel);
+    // Luồng năng lượng dồn về ngôi sao chiến thắng ở Act 4.
+    float coord = vFlowDir >= 0.0 ? vT : 1.0 - vT;
+    float crest = smoothstep(0.17, 0.0, abs(coord - uSurgeProgress));
+    float trail = smoothstep(0.45, 0.0, abs(coord - uSurgeProgress)) * 0.28;
+    float surge = (crest + trail) * uSurge;
+
+    float brightness = vIntensity * (0.85 + 0.7 * pulse + 1.4 * travel)
+      + surge * 2.5
+      + uSurgeFlash * vIntensity * 1.5;
+
+    color = mix(color, vec3(1.0, 0.88, 0.55), clamp(surge * 0.85 + uSurgeFlash * 0.35, 0.0, 1.0));
+
     gl_FragColor = vec4(color * (0.8 + brightness * 1.25), min(brightness * 0.85, 1.0));
   }
 `;
@@ -758,7 +1098,7 @@ const COMET_HEAD_VERTEX = /* glsl */ `
     gl_PointSize = clamp(
       aSize * uPixelRatio * (245.0 / max(-mvPosition.z, 1.0)),
       1.0,
-      380.0
+      320.0
     );
 
     vTwinkle = 0.9 + 0.1 * sin(uTime * 5.0 + aPhase * 6.2831);
@@ -789,7 +1129,7 @@ const COMET_HEAD_FRAGMENT = /* glsl */ `
       * uOpacity;
 
     vec3 color = mix(vec3(0.62, 0.9, 1.0), vec3(1.0, 0.95, 0.82), core);
-    gl_FragColor = vec4(color * 1.7, min(shape, 1.0));
+    gl_FragColor = vec4(color * 1.45, min(shape, 1.0));
   }
 `;
 
@@ -830,7 +1170,7 @@ const TAIL_FRAGMENT = /* glsl */ `
     float flow = 0.72 + 0.28 * sin(vT * 26.0 - uTime * 7.0 + vSide * 1.6);
     float alpha = pow(1.0 - vT, 1.25) * edge * flow * uOpacity * 1.1;
 
-    gl_FragColor = vec4(color * (1.15 + 1.25 * pow(1.0 - vT, 2.0)), alpha * 0.92);
+    gl_FragColor = vec4(color * (1.15 + 1.25 * pow(1.0 - vT, 2.0)), alpha * 0.8);
   }
 `;
 
@@ -874,5 +1214,45 @@ const COMET_SPARKLE_FRAGMENT = /* glsl */ `
     float alpha = (core + spike * 0.25 * core) * vAlpha;
     vec3 color = mix(vec3(0.7, 0.9, 1.0), vec3(1.0, 0.86, 0.6), vSeed);
     gl_FragColor = vec4(color * 1.6, alpha);
+  }
+`;
+
+/* ====================================================================== */
+/* Shader: vành xung kích nhỏ khi tia sáng chạm một ngôi sao              */
+/* ====================================================================== */
+
+const STAR_PULSE_VERTEX = /* glsl */ `
+  varying vec2 vUv;
+
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const STAR_PULSE_FRAGMENT = /* glsl */ `
+  uniform float uProgress;
+  uniform float uAlpha;
+  uniform vec3 uColor;
+
+  varying vec2 vUv;
+
+  void main() {
+    vec2 p = vUv - 0.5;
+    float r = length(p) * 2.0;
+
+    float ringRadius = 0.2 + uProgress * 0.72;
+    float ringWidth = 0.026 + 0.03 * (1.0 - uProgress);
+    float ring = smoothstep(ringWidth, 0.0, abs(r - ringRadius));
+    float innerGlow = smoothstep(ringRadius, 0.0, r) * 0.1;
+
+    float angle = atan(p.y, p.x);
+    float shimmer = 0.72 + 0.28 * sin(angle * 8.0 + uProgress * 14.0);
+    ring *= shimmer;
+
+    float alpha = (ring + innerGlow) * uAlpha;
+    vec3 color = uColor * (1.3 + ring * 2.4);
+
+    gl_FragColor = vec4(color, alpha);
   }
 `;

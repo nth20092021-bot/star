@@ -8,15 +8,22 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 
 import type { ICelestialGraphics } from '../shared/ICelestialGraphics';
 import type { StarNode, CometPhysicsState, ConstellationEdge } from '../shared/CosmicTypes';
+import { cosmicEventBus } from '../shared/CosmicEventBus';
+import { ObservatoryCameraDirector } from '../core/ObservatoryCameraDirector';
 import { ObservatoryEnvironment } from './ObservatoryEnvironment';
 import { ConstellationWebRenderer } from './ConstellationWebRenderer';
 import { SupernovaEffect } from './SupernovaEffect';
+import { CosmicAudioEngine } from './CosmicAudioEngine';
 import { clamp, damp } from './GraphicsUtils';
+import type { CinematicPhase } from './GraphicsUtils';
 
 const BLOOM_BASE_STRENGTH = 0.55;
 const BASE_EXPOSURE = 0.98;
 const BASE_CAMERA_POSITION = new THREE.Vector3(0, 13, 56);
 const BASE_LOOK_TARGET = new THREE.Vector3(0, 0.4, 0);
+
+const SOUND_ON_ICON = `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#ffd166" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.4 6.1a9 9 0 0 1 0 11.8"/></svg>`;
+const SOUND_OFF_ICON = `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><line x1="16" y1="9" x2="21" y2="14"/><line x1="21" y1="9" x2="16" y2="14"/></svg>`;
 
 /**
  * 🎨 CelestialGraphicsEngine — DeepSeek (/src/graphics)
@@ -35,7 +42,7 @@ const BASE_LOOK_TARGET = new THREE.Vector3(0, 0.4, 0);
  */
 export class CelestialGraphicsEngine implements ICelestialGraphics {
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(60, 1, 0.1, 4000);
+  private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 4000);
 
   private container: HTMLElement | null = null;
   private renderer: THREE.WebGLRenderer | null = null;
@@ -49,6 +56,8 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
   private environment: ObservatoryEnvironment | null = null;
   private web: ConstellationWebRenderer | null = null;
   private supernova: SupernovaEffect | null = null;
+  private readonly audio = new CosmicAudioEngine();
+  private audioButton: HTMLButtonElement | null = null;
 
   private resizeObserver: ResizeObserver | null = null;
   private animationFrameId = 0;
@@ -69,6 +78,12 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
   private weave = 0;
   private lastExternalFrameAt = Number.NEGATIVE_INFINITY;
   private lastLoopTimestamp = 0;
+  private lastStepWall = 0;
+
+  private readonly cinematicPhase: CinematicPhase = { active: false, time: 0, act: 0 };
+  private localCinematicActive = false;
+  private localCinematicTime = 0;
+  private readonly effectUnsubscribers: Array<() => void> = [];
 
   private readonly lookTarget = new THREE.Vector3().copy(BASE_LOOK_TARGET);
   private readonly desiredCameraPosition = new THREE.Vector3();
@@ -192,6 +207,7 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
 
     /* --------------------- Vòng lặp & resize ------------------------ */
     this.lastExternalFrameAt = Number.NEGATIVE_INFINITY;
+    this.lastStepWall = performance.now();
     this.startAnimationLoop();
 
     if (typeof ResizeObserver !== 'undefined') {
@@ -199,6 +215,28 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
       this.resizeObserver.observe(container);
     }
     window.addEventListener('resize', this.onWindowResize);
+
+    this.effectUnsubscribers.push(
+      cosmicEventBus.on('WEAVE_START', () => {
+        this.localCinematicActive = true;
+        this.localCinematicTime = 0;
+      }),
+      cosmicEventBus.on('STAR_LINKED', ({ starId, position }) => {
+        this.web?.triggerStarPulse(position, starId);
+        const star = this.stars.find((item) => item.id === starId);
+        if (star) {
+          this.web?.showStudentHologram(star.studentName, position, starId);
+        }
+      }),
+      cosmicEventBus.on('CAMERA_RESET', () => {
+        this.localCinematicActive = false;
+        this.localCinematicTime = 0;
+      })
+    );
+
+    // Âm thanh điện ảnh tổng hợp + nút tắt tiếng tối giản ở góc trái.
+    this.audio.attach();
+    this.createAudioButton();
 
     console.log('[CelestialGraphicsEngine] Đài Thiên Văn đã khởi tạo.');
   }
@@ -230,20 +268,46 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
   private step(dt: number): void {
     if (!this.renderer || !this.composer) return;
 
-    const safeDt = clamp(dt, 0, 0.1);
+    // Đồng hồ thực cho toàn bộ hiệu ứng hình ảnh: giữ đúng nhịp 12 giây
+    // kể cả khi trình duyệt tụt FPS hoặc chạy trong môi trường headless.
+    const now = performance.now();
+    const safeDt =
+      this.lastStepWall > 0
+        ? clamp((now - this.lastStepWall) / 1000, 0, 0.12)
+        : clamp(dt, 0, 0.12);
+    this.lastStepWall = now;
     this.visualTime += safeDt;
 
+    this.updateCinematicPhase(safeDt);
+
     const cometSpeed = clamp(this.comet?.speedNormalized ?? 0, 0, 1);
-    const weaveTarget = clamp(
-      Math.max(cometSpeed, this.edges.length > 0 ? 0.45 : 0),
-      0,
-      1
+    let weaveTarget = Math.max(cometSpeed, this.edges.length > 0 ? 0.45 : 0);
+    if (this.cinematicPhase.active) {
+      const cineTime = this.cinematicPhase.time;
+      if (cineTime < 2) {
+        weaveTarget = Math.max(weaveTarget, 0.8 + 0.2 * clamp(cineTime / 1.8, 0, 1));
+      } else if (cineTime < 10.5) {
+        weaveTarget = Math.max(weaveTarget, 0.55);
+      } else {
+        weaveTarget = Math.max(weaveTarget, 0.9);
+      }
+    }
+    this.weave = damp(this.weave, clamp(weaveTarget, 0, 1), 2.0, safeDt);
+
+    // Camera Director là nhạc trưởng; graphics chỉ sao chép tư thế đã damping.
+    const director = ObservatoryCameraDirector.active;
+    if (director) {
+      this.applyDirectorPose(director);
+    } else {
+      this.updateCamera(safeDt);
+    }
+
+    this.environment?.update(
+      safeDt,
+      this.visualTime,
+      this.weave,
+      this.cinematicPhase
     );
-    this.weave = damp(this.weave, weaveTarget, 2.0, safeDt);
-
-    this.updateCamera(safeDt);
-
-    this.environment?.update(safeDt, this.visualTime, this.weave);
     this.web?.update(
       safeDt,
       this.visualTime,
@@ -264,6 +328,45 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
 
     // Bảng tên học sinh được vẽ sau bloom để giữ độ sắc nét tối đa.
     this.supernova?.renderOverlay(this.renderer, this.camera);
+  }
+
+  private updateCinematicPhase(dt: number): void {
+    if (this.localCinematicActive) {
+      this.localCinematicTime += dt;
+    }
+
+    const director = ObservatoryCameraDirector.active;
+    if (director) {
+      this.cinematicPhase.active =
+        director.isCinematicActive() || director.getMode() === 'SUPERNOVA_FOCUS';
+      this.cinematicPhase.time = director.getCinematicTime();
+      this.cinematicPhase.act = director.getAct();
+      return;
+    }
+
+    this.cinematicPhase.active = this.localCinematicActive;
+    this.cinematicPhase.time = this.localCinematicTime;
+    this.cinematicPhase.act = this.localCinematicActive
+      ? this.estimateFallbackAct(this.localCinematicTime)
+      : 0;
+  }
+
+  private estimateFallbackAct(time: number): number {
+    if (time < 2) return 1;
+    if (time < 7.5) return 2;
+    if (time < 10.5) return 3;
+    return 4;
+  }
+
+  private applyDirectorPose(director: ObservatoryCameraDirector): void {
+    this.camera.position.copy(director.getCameraPosition());
+    this.camera.quaternion.copy(director.getCameraQuaternion());
+
+    const fov = director.getFov();
+    if (Math.abs(this.camera.fov - fov) > 0.001) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   private updateCamera(dt: number): void {
@@ -314,6 +417,7 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
   }
 
   public triggerSupernova(winnerStar: StarNode): void {
+    this.web?.triggerEnergySurge(winnerStar.currentPosition);
     this.web?.fadeOutComet();
     this.supernova?.trigger(winnerStar);
   }
@@ -323,9 +427,17 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
   }
 
   public resetVisuals(): void {
+    this.audio.reset();
     this.web?.reset();
     this.supernova?.reset();
+    this.environment?.resetCinematic();
     this.weave = 0;
+    this.localCinematicActive = false;
+    this.localCinematicTime = 0;
+    this.cinematicPhase.active = false;
+    this.cinematicPhase.time = 0;
+    this.cinematicPhase.act = 0;
+    this.lastStepWall = performance.now();
 
     for (const star of this.stars) {
       star.brightness = 1;
@@ -351,9 +463,15 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
       this.renderer.toneMappingExposure = BASE_EXPOSURE;
     }
 
-    this.camera.position.copy(BASE_CAMERA_POSITION);
-    this.lookTarget.copy(BASE_LOOK_TARGET);
-    this.camera.lookAt(this.lookTarget);
+    // Khi có CameraDirector, hãy để director tự đưa camera về idle bằng
+    // damping; nếu chạy độc lập thì đặt lại camera ngay.
+    if (!ObservatoryCameraDirector.active) {
+      this.camera.position.copy(BASE_CAMERA_POSITION);
+      this.lookTarget.copy(BASE_LOOK_TARGET);
+      this.camera.lookAt(this.lookTarget);
+      this.camera.fov = 50;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   public resize(width: number, height: number): void {
@@ -378,10 +496,81 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
     this.supernova?.resize(w, h);
   }
 
+  /* ================================================================== */
+  /* Nút âm thanh                                                       */
+  /* ================================================================== */
+
+  private createAudioButton(): void {
+    if (!this.container || this.audioButton) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.style.cssText = [
+      'position:absolute',
+      // Nằm ngay dưới hàng HUD trên cùng: hàng đó phủ pointer-events toàn
+      // chiều ngang nên đặt cao hơn sẽ bị chặn click.
+      'top:76px',
+      'left:24px',
+      'z-index:6',
+      'width:42px',
+      'height:42px',
+      'border-radius:50%',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'cursor:pointer',
+      'outline:none',
+      'pointer-events:auto',
+      'background:rgba(9,13,28,0.78)',
+      'backdrop-filter:blur(14px)',
+      'border:1px solid rgba(255,255,255,0.2)',
+      'box-shadow:0 4px 20px rgba(0,0,0,0.35)',
+      'transition:all 0.25s ease',
+    ].join(';');
+
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const muted = this.audio.toggleMute();
+      this.updateAudioButton(muted);
+    });
+    button.addEventListener('mouseenter', () => {
+      button.style.transform = 'scale(1.08)';
+      button.style.borderColor = 'rgba(255,209,102,0.6)';
+    });
+    button.addEventListener('mouseleave', () => {
+      button.style.transform = 'none';
+      button.style.borderColor = 'rgba(255,255,255,0.2)';
+    });
+
+    this.container.appendChild(button);
+    this.audioButton = button;
+    this.updateAudioButton(this.audio.isMuted());
+  }
+
+  private updateAudioButton(muted: boolean): void {
+    const button = this.audioButton;
+    if (!button) return;
+
+    button.setAttribute('aria-pressed', String(muted));
+    const label = muted ? 'Bật âm thanh' : 'Tắt âm thanh';
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.innerHTML = muted ? SOUND_OFF_ICON : SOUND_ON_ICON;
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.loopRunning = false;
+
+    for (const unsub of this.effectUnsubscribers) {
+      unsub();
+    }
+    this.effectUnsubscribers.length = 0;
+
+    this.audio.dispose();
+    this.audioButton?.remove();
+    this.audioButton = null;
 
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
