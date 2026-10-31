@@ -2,11 +2,15 @@ import {
   OrbitalPhysicsEngine,
   ObservatoryCameraDirector,
   MinimalUI,
+  checkAndPromptInAppBrowser,
 } from './core';
 import { CelestialGraphicsEngine } from './graphics/CelestialGraphicsEngine';
 import { cosmicEventBus } from './shared/CosmicEventBus';
 
 async function bootstrap(): Promise<void> {
+  // Tự động kiểm tra và hướng dẫn chuyển sang Google Chrome nếu mở từ Messenger, Zalo, FB...
+  checkAndPromptInAppBrowser();
+
   const container = document.getElementById('celestial-canvas-container');
   if (!container) {
     console.error('Không tìm thấy #celestial-canvas-container trong DOM');
