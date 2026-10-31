@@ -7,5 +7,7 @@ dist-ssr
 .idea
 .DS_Store
 .playwright-mcp/
-
-
+*.png
+.mcp.json
+mcp_config.json
+.kilocode/
