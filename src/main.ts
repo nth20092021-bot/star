@@ -24,15 +24,27 @@ async function bootstrap(): Promise<void> {
   const graphicsEngine = new CelestialGraphicsEngine();
   graphicsEngine.init(container, initialStars);
 
-  // 4. Khởi tạo MinimalUI với các callback điều khiển
+  // 4. Khởi tạo MinimalUI với các callback điều khiển tối giản
   new MinimalUI('celestial-ui', {
     onStart: () => {
       physicsEngine.startWeaving();
+    },
+    onNext: () => {
+      // Ẩn bảng thông báo vinh danh và sẵn sàng cho lượt dệt tiếp theo
+      graphicsEngine.dismissPlaque();
+      physicsEngine.reset();
+      cosmicEventBus.emit('DISMISS_PLAQUE', undefined);
     },
     onReset: () => {
       physicsEngine.reset();
       graphicsEngine.resetVisuals();
     },
+    onResetHistory: () => {
+      physicsEngine.resetChosenWinners();
+      graphicsEngine.resetVisuals();
+    },
+    getStars: () => physicsEngine.getStars(),
+    getChosenWinnerIds: () => physicsEngine.getChosenWinnerIds(),
   });
 
   // 5. Kết nối các sự kiện trên CosmicEventBus giữa Core & Graphics
@@ -42,6 +54,10 @@ async function bootstrap(): Promise<void> {
 
   cosmicEventBus.on('CAMERA_RESET', () => {
     graphicsEngine.resetVisuals();
+  });
+
+  cosmicEventBus.on('DISMISS_PLAQUE', () => {
+    graphicsEngine.dismissPlaque();
   });
 
   // 6. Xử lý Window Resize

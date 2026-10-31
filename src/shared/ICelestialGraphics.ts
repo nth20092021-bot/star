@@ -54,6 +54,11 @@ export interface ICelestialGraphics {
   resetVisuals(): void;
 
   /**
+   * Ẩn bảng thông báo vinh danh Supernova và trở về trạng thái quan sát
+   */
+  dismissPlaque(): void;
+
+  /**
    * Xử lý khi kích thước cửa sổ trình duyệt thay đổi
    * Cập nhật Camera Aspect Ratio, Renderer Size, và EffectComposer Size.
    *

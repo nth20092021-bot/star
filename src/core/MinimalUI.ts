@@ -1,21 +1,32 @@
 import { cosmicEventBus } from '../shared/CosmicEventBus';
+import type { StarNode } from '../shared/CosmicTypes';
 
 export interface UIControlsCallbacks {
   onStart: () => void;
+  onNext: () => void;
   onReset: () => void;
+  onResetHistory: () => void;
+  getStars: () => StarNode[];
+  getChosenWinnerIds: () => Set<number>;
 }
+
+export type UIState = 'READY' | 'WEAVING' | 'WINNER' | 'ALL_COMPLETED';
 
 export class MinimalUI {
   private container: HTMLElement;
   private callbacks: UIControlsCallbacks;
-  private btnStart!: HTMLButtonElement;
-  private btnReset!: HTMLButtonElement;
-  private statusText!: HTMLElement;
-  private starCounter!: HTMLElement;
-  private speedBarFill!: HTMLElement;
-  private speedLabel!: HTMLElement;
 
-  private visitedCount = 0;
+  private btnAction!: HTMLButtonElement;
+  private btnSettings!: HTMLButtonElement;
+  private statusBadge!: HTMLElement;
+
+  private settingsModal!: HTMLElement;
+  private settingsCloseBtn!: HTMLButtonElement;
+  private settingsResetHistoryBtn!: HTMLButtonElement;
+  private studentListContainer!: HTMLElement;
+  private statsSummaryEl!: HTMLElement;
+
+  private currentState: UIState = 'READY';
   private unsubscribers: Array<() => void> = [];
 
   constructor(containerId: string, callbacks: UIControlsCallbacks) {
@@ -29,151 +40,270 @@ export class MinimalUI {
     this.render();
     this.bindEvents();
     this.setupCosmicListeners();
+    this.updateStatusBadge();
   }
 
   private render(): void {
     this.container.innerHTML = `
-      <div style="position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 24px 32px; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-        <!-- Top Header HUD -->
-        <header style="display: flex; justify-content: space-between; align-items: flex-start; pointer-events: auto;">
-          <div style="background: rgba(8, 12, 28, 0.72); backdrop-filter: blur(12px); border: 1px solid rgba(198, 168, 105, 0.35); border-radius: 12px; padding: 14px 22px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-size: 20px;">🌌</span>
-              <h1 style="margin: 0; font-size: 19px; font-weight: 700; color: #f5eedc; letter-spacing: 1.2px; text-transform: uppercase;">
-                Đài Thiên Văn Dệt Chòm Sao
-              </h1>
-            </div>
-            <p style="margin: 4px 0 0 30px; font-size: 12px; color: #a2b4d2; letter-spacing: 0.5px;">
-              The Celestial Constellation Weaver • Hệ Thống 28 Vì Tinh Tú
-            </p>
+      <div style="position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 20px 24px; box-sizing: border-box; font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        
+        <!-- Top Right Floating HUD (Tối giản, không chứa tên game) -->
+        <header style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; pointer-events: auto;">
+          <!-- Quick Status Badge -->
+          <div id="hud-status-badge" style="background: rgba(9, 13, 28, 0.78); backdrop-filter: blur(14px); border: 1px solid rgba(255, 209, 102, 0.3); border-radius: 24px; padding: 8px 18px; font-size: 13px; font-weight: 600; color: #ffd166; box-shadow: 0 4px 20px rgba(0,0,0,0.35); display: flex; align-items: center; gap: 8px;">
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ffd166; box-shadow: 0 0 8px #ffd166;"></span>
+            <span id="badge-text">Đã chọn: 0 / 28</span>
           </div>
 
-          <!-- Status / Star Stats Badge -->
-          <div style="background: rgba(8, 12, 28, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(88, 166, 255, 0.35); border-radius: 12px; padding: 12px 20px; text-align: right; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-            <div style="font-size: 11px; text-transform: uppercase; color: #7ee787; font-weight: 600; letter-spacing: 1px;" id="hud-status">
-              ● Sẵn sàng dệt chòm sao
-            </div>
-            <div style="margin-top: 4px; font-size: 14px; font-weight: 600; color: #e6edf3;" id="hud-counter">
-              Sao đã kết nối: <span style="color: #ffd166;">0</span> / 28
-            </div>
-          </div>
+          <!-- Bánh Răng Setting Button -->
+          <button id="btn-settings" class="interactive" title="Xem danh sách & cài đặt" style="background: rgba(9, 13, 28, 0.78); backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.2); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 19px; cursor: pointer; color: #e6edf3; transition: all 0.25s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.35); outline: none;">
+            ⚙️
+          </button>
         </header>
 
-        <!-- Bottom Controls Bar -->
-        <footer style="display: flex; flex-direction: column; align-items: center; gap: 14px; pointer-events: auto;">
-          <!-- Speed Gauge & Progress -->
-          <div style="width: 380px; max-width: 90vw; background: rgba(8, 12, 28, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px; padding: 10px 18px; box-sizing: border-box;">
-            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #8b949e; margin-bottom: 6px;">
-              <span id="speed-label">Tốc độ Sao Chổi: 0%</span>
-              <span>Động lực học quỹ đạo</span>
-            </div>
-            <div style="width: 100%; height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 3px; overflow: hidden;">
-              <div id="speed-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38ef7d, #11998e, #ffd166); border-radius: 3px; transition: width 0.1s linear;"></div>
-            </div>
-          </div>
-
-          <!-- Buttons Action Row -->
-          <div style="display: flex; gap: 16px;">
-            <button id="btn-start" class="interactive" style="background: linear-gradient(135deg, #ffd166, #e09f3e); color: #080a14; border: none; font-size: 15px; font-weight: 700; padding: 12px 34px; border-radius: 30px; cursor: pointer; letter-spacing: 0.8px; box-shadow: 0 4px 20px rgba(255, 209, 102, 0.4); transition: all 0.25s ease; outline: none; display: flex; align-items: center; gap: 8px;">
-              <span>☄️</span> Bắt đầu
-            </button>
-            <button id="btn-reset" class="interactive" style="background: rgba(22, 27, 46, 0.85); color: #c9d1d9; border: 1px solid rgba(255, 255, 255, 0.18); font-size: 14px; font-weight: 600; padding: 12px 24px; border-radius: 30px; cursor: pointer; letter-spacing: 0.5px; transition: all 0.25s ease; outline: none;">
-              Đặt lại
-            </button>
-          </div>
+        <!-- Bottom Controls Bar (Tối giản nhất có thể) -->
+        <footer style="display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: auto; margin-bottom: 8px;">
+          <!-- Nút hành động chính đa trạng thái: Bắt đầu / Đang dệt / Tiếp theo -->
+          <button id="btn-action" class="interactive" style="background: linear-gradient(135deg, #ffd166, #e09f3e); color: #080a14; border: none; font-size: 16px; font-weight: 700; padding: 14px 44px; border-radius: 36px; cursor: pointer; letter-spacing: 0.6px; box-shadow: 0 6px 28px rgba(255, 209, 102, 0.45); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1); outline: none; display: flex; align-items: center; gap: 10px;">
+            <span id="btn-icon">☄️</span>
+            <span id="btn-text">Bắt đầu</span>
+          </button>
         </footer>
+
+        <!-- Settings & Danh Sách Học Sinh Modal (Ẩn mặc định) -->
+        <div id="settings-modal" style="position: absolute; inset: 0; background: rgba(3, 5, 14, 0.75); backdrop-filter: blur(12px); display: none; align-items: center; justify-content: center; pointer-events: auto; z-index: 100;">
+          <div style="background: linear-gradient(160deg, rgba(14, 19, 38, 0.96), rgba(8, 10, 22, 0.98)); border: 1px solid rgba(255, 209, 102, 0.4); border-radius: 20px; width: 620px; max-width: 92vw; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 16px 50px rgba(0,0,0,0.7); overflow: hidden;">
+            
+            <!-- Modal Header -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 20px;">⚙️</span>
+                <h2 style="margin: 0; font-size: 17px; font-weight: 700; color: #ffd166; letter-spacing: 0.5px;">
+                  Bảng Trạng Thái & Danh Sách Học Sinh
+                </h2>
+              </div>
+              <button id="settings-close-btn" style="background: transparent; border: none; font-size: 20px; color: #8b949e; cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: color 0.2s;">
+                ✕
+              </button>
+            </div>
+
+            <!-- Modal Summary Bar -->
+            <div style="padding: 14px 24px; background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: space-between; align-items: center; flex-wrap: gap;">
+              <div id="stats-summary" style="font-size: 13px; color: #cbd5e1; display: flex; gap: 16px;">
+                <!-- Render động -->
+              </div>
+              <button id="settings-reset-history-btn" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                🔄 Đặt lại danh sách
+              </button>
+            </div>
+
+            <!-- Scrollable Student List -->
+            <div id="student-list-container" style="flex: 1; overflow-y: auto; padding: 16px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+              <!-- Danh sách 28 học sinh render động tại đây -->
+            </div>
+          </div>
+        </div>
+
       </div>
     `;
 
-    this.btnStart = this.container.querySelector('#btn-start') as HTMLButtonElement;
-    this.btnReset = this.container.querySelector('#btn-reset') as HTMLButtonElement;
-    this.statusText = this.container.querySelector('#hud-status') as HTMLElement;
-    this.starCounter = this.container.querySelector('#hud-counter') as HTMLElement;
-    this.speedBarFill = this.container.querySelector('#speed-bar-fill') as HTMLElement;
-    this.speedLabel = this.container.querySelector('#speed-label') as HTMLElement;
+    this.btnAction = this.container.querySelector('#btn-action') as HTMLButtonElement;
+    this.btnSettings = this.container.querySelector('#btn-settings') as HTMLButtonElement;
+    this.statusBadge = this.container.querySelector('#badge-text') as HTMLElement;
+
+    this.settingsModal = this.container.querySelector('#settings-modal') as HTMLElement;
+    this.settingsCloseBtn = this.container.querySelector('#settings-close-btn') as HTMLButtonElement;
+    this.settingsResetHistoryBtn = this.container.querySelector('#settings-reset-history-btn') as HTMLButtonElement;
+    this.studentListContainer = this.container.querySelector('#student-list-container') as HTMLElement;
+    this.statsSummaryEl = this.container.querySelector('#stats-summary') as HTMLElement;
   }
 
   private bindEvents(): void {
-    this.btnStart.addEventListener('click', () => {
-      this.callbacks.onStart();
-    });
-
-    this.btnReset.addEventListener('click', () => {
-      this.callbacks.onReset();
-    });
-
-    // Hover effects
-    this.btnStart.addEventListener('mouseenter', () => {
-      if (!this.btnStart.disabled) {
-        this.btnStart.style.transform = 'translateY(-2px) scale(1.02)';
-        this.btnStart.style.boxShadow = '0 6px 26px rgba(255, 209, 102, 0.6)';
+    // Nút hành động chính
+    this.btnAction.addEventListener('click', () => {
+      if (this.currentState === 'READY') {
+        this.callbacks.onStart();
+      } else if (this.currentState === 'WINNER') {
+        // Bấm "Tiếp theo" -> ẩn bảng vinh danh và sẵn sàng cho lượt mới
+        this.callbacks.onNext();
+        this.setUIState('READY');
+      } else if (this.currentState === 'ALL_COMPLETED') {
+        if (confirm('Tất cả 28 học sinh đã được chọn. Bạn có muốn đặt lại danh sách để bắt đầu vòng mới?')) {
+          this.callbacks.onResetHistory();
+          this.setUIState('READY');
+        }
       }
     });
-    this.btnStart.addEventListener('mouseleave', () => {
-      this.btnStart.style.transform = 'none';
-      this.btnStart.style.boxShadow = '0 4px 20px rgba(255, 209, 102, 0.4)';
+
+    // Mở / Đóng Settings Modal
+    this.btnSettings.addEventListener('click', () => {
+      this.openSettings();
     });
 
-    this.btnReset.addEventListener('mouseenter', () => {
-      this.btnReset.style.background = 'rgba(38, 45, 72, 0.9)';
-      this.btnReset.style.borderColor = 'rgba(255, 255, 255, 0.35)';
+    this.settingsCloseBtn.addEventListener('click', () => {
+      this.closeSettings();
     });
-    this.btnReset.addEventListener('mouseleave', () => {
-      this.btnReset.style.background = 'rgba(22, 27, 46, 0.85)';
-      this.btnReset.style.borderColor = 'rgba(255, 255, 255, 0.18)';
+
+    this.settingsModal.addEventListener('click', (e) => {
+      if (e.target === this.settingsModal) {
+        this.closeSettings();
+      }
+    });
+
+    // Đặt lại lịch sử chọn
+    this.settingsResetHistoryBtn.addEventListener('click', () => {
+      if (confirm('Xác nhận đặt lại danh sách? Tất cả 28 học sinh sẽ có thể được chọn lại từ đầu.')) {
+        this.callbacks.onResetHistory();
+        this.updateSettingsContent();
+        this.updateStatusBadge();
+        this.setUIState('READY');
+      }
+    });
+
+    // Hover effect trên btnSettings
+    this.btnSettings.addEventListener('mouseenter', () => {
+      this.btnSettings.style.transform = 'rotate(30deg) scale(1.08)';
+      this.btnSettings.style.borderColor = 'rgba(255, 209, 102, 0.6)';
+    });
+    this.btnSettings.addEventListener('mouseleave', () => {
+      this.btnSettings.style.transform = 'none';
+      this.btnSettings.style.borderColor = 'rgba(255, 255, 255, 0.2)';
     });
   }
 
   private setupCosmicListeners(): void {
-    const unsubStart = cosmicEventBus.on('WEAVE_START', ({ totalSteps }) => {
-      this.btnStart.disabled = true;
-      this.btnStart.style.opacity = '0.5';
-      this.btnStart.style.cursor = 'not-allowed';
-
-      this.visitedCount = 0;
-      this.statusText.innerHTML = `● Đang dệt chòm sao (0/${totalSteps})...`;
-      this.statusText.style.color = '#ffd166';
-      this.starCounter.innerHTML = `Sao đã kết nối: <span style="color: #ffd166;">0</span> / 28`;
+    const unsubStart = cosmicEventBus.on('WEAVE_START', () => {
+      this.setUIState('WEAVING');
     });
 
-    const unsubStep = cosmicEventBus.on('COMET_STEP', ({ comet }) => {
-      const pct = Math.round(comet.speedNormalized * 100);
-      this.speedBarFill.style.width = `${pct}%`;
-      this.speedLabel.textContent = `Tốc độ Sao Chổi: ${pct}%`;
-    });
-
-    const unsubStarLinked = cosmicEventBus.on('STAR_LINKED', ({ stepIndex }) => {
-      this.visitedCount++;
-      this.starCounter.innerHTML = `Sao đã kết nối: <span style="color: #ffd166;">${this.visitedCount}</span> / 28`;
-      this.statusText.innerHTML = `● Đang dệt chòm sao (Bước ${stepIndex})...`;
-    });
-
-    const unsubSupernova = cosmicEventBus.on('STAR_LOCKED_SUPERNOVA', ({ winnerStar }) => {
-      this.statusText.innerHTML = `🌟 ĐÃ KHÓA: ${winnerStar.studentName.toUpperCase()}`;
-      this.statusText.style.color = '#ff9f43';
-
-      this.speedBarFill.style.width = '0%';
-      this.speedLabel.textContent = 'Tốc độ Sao Chổi: 0% (Khóa mục tiêu)';
-
-      this.btnStart.disabled = false;
-      this.btnStart.style.opacity = '1';
-      this.btnStart.style.cursor = 'pointer';
+    const unsubSupernova = cosmicEventBus.on('STAR_LOCKED_SUPERNOVA', () => {
+      this.setUIState('WINNER');
+      this.updateStatusBadge();
     });
 
     const unsubReset = cosmicEventBus.on('CAMERA_RESET', () => {
-      this.btnStart.disabled = false;
-      this.btnStart.style.opacity = '1';
-      this.btnStart.style.cursor = 'pointer';
-
-      this.visitedCount = 0;
-      this.statusText.innerHTML = '● Sẵn sàng dệt chòm sao';
-      this.statusText.style.color = '#7ee787';
-      this.starCounter.innerHTML = `Sao đã kết nối: <span style="color: #ffd166;">0</span> / 28`;
-      this.speedBarFill.style.width = '0%';
-      this.speedLabel.textContent = 'Tốc độ Sao Chổi: 0%';
+      this.setUIState('READY');
+      this.updateStatusBadge();
     });
 
-    this.unsubscribers.push(unsubStart, unsubStep, unsubStarLinked, unsubSupernova, unsubReset);
+    const unsubDismiss = cosmicEventBus.on('DISMISS_PLAQUE', () => {
+      this.setUIState('READY');
+      this.updateStatusBadge();
+    });
+
+    this.unsubscribers.push(unsubStart, unsubSupernova, unsubReset, unsubDismiss);
+  }
+
+  public setUIState(state: UIState): void {
+    this.currentState = state;
+    const btnIcon = this.btnAction.querySelector('#btn-icon') as HTMLElement;
+    const btnText = this.btnAction.querySelector('#btn-text') as HTMLElement;
+
+    const remaining = this.getRemainingCount();
+    if (state === 'READY' && remaining === 0) {
+      this.currentState = 'ALL_COMPLETED';
+      state = 'ALL_COMPLETED';
+    }
+
+    switch (state) {
+      case 'READY':
+        this.btnAction.disabled = false;
+        this.btnAction.style.opacity = '1';
+        this.btnAction.style.cursor = 'pointer';
+        this.btnAction.style.background = 'linear-gradient(135deg, #ffd166, #e09f3e)';
+        this.btnAction.style.boxShadow = '0 6px 28px rgba(255, 209, 102, 0.45)';
+        btnIcon.textContent = '☄️';
+        btnText.textContent = 'Bắt đầu';
+        break;
+
+      case 'WEAVING':
+        this.btnAction.disabled = true;
+        this.btnAction.style.opacity = '0.7';
+        this.btnAction.style.cursor = 'not-allowed';
+        this.btnAction.style.background = 'linear-gradient(135deg, #718096, #4a5568)';
+        this.btnAction.style.boxShadow = 'none';
+        btnIcon.textContent = '⏳';
+        btnText.textContent = 'Đang dệt chòm sao...';
+        break;
+
+      case 'WINNER':
+        this.btnAction.disabled = false;
+        this.btnAction.style.opacity = '1';
+        this.btnAction.style.cursor = 'pointer';
+        // Hiệu ứng nút Tiếp theo màu xanh ngọc - vàng nổi bật
+        this.btnAction.style.background = 'linear-gradient(135deg, #2dd4bf, #059669)';
+        this.btnAction.style.boxShadow = '0 6px 32px rgba(45, 212, 191, 0.55)';
+        btnIcon.textContent = '✨';
+        btnText.textContent = 'Tiếp theo';
+        break;
+
+      case 'ALL_COMPLETED':
+        this.btnAction.disabled = false;
+        this.btnAction.style.opacity = '1';
+        this.btnAction.style.cursor = 'pointer';
+        this.btnAction.style.background = 'linear-gradient(135deg, #a855f7, #6366f1)';
+        this.btnAction.style.boxShadow = '0 6px 28px rgba(168, 85, 247, 0.45)';
+        btnIcon.textContent = '🎉';
+        btnText.textContent = 'Đã chọn hết (Đặt lại)';
+        break;
+    }
+  }
+
+  private updateStatusBadge(): void {
+    const chosen = this.callbacks.getChosenWinnerIds().size;
+    const total = this.callbacks.getStars().length || 28;
+    this.statusBadge.textContent = `Đã chọn: ${chosen} / ${total}`;
+  }
+
+  private getRemainingCount(): number {
+    const chosen = this.callbacks.getChosenWinnerIds().size;
+    const total = this.callbacks.getStars().length || 28;
+    return total - chosen;
+  }
+
+  private openSettings(): void {
+    this.updateSettingsContent();
+    this.settingsModal.style.display = 'flex';
+  }
+
+  private closeSettings(): void {
+    this.settingsModal.style.display = 'none';
+  }
+
+  private updateSettingsContent(): void {
+    const stars = this.callbacks.getStars();
+    const chosenIds = this.callbacks.getChosenWinnerIds();
+    const total = stars.length;
+    const chosenCount = chosenIds.size;
+    const remainingCount = total - chosenCount;
+
+    // Cập nhật summary
+    this.statsSummaryEl.innerHTML = `
+      <span>Tổng số: <strong style="color: #ffd166;">${total}</strong></span>
+      <span>Đã vinh danh: <strong style="color: #38ef7d;">${chosenCount}</strong></span>
+      <span>Còn lại: <strong style="color: #60a5fa;">${remainingCount}</strong></span>
+    `;
+
+    // Cập nhật danh sách 28 học sinh
+    let html = '';
+    for (const star of stars) {
+      const isChosen = chosenIds.has(star.id);
+      const bg = isChosen ? 'rgba(34, 197, 94, 0.12)' : 'rgba(255, 255, 255, 0.04)';
+      const border = isChosen ? 'rgba(34, 197, 94, 0.4)' : 'rgba(255, 255, 255, 0.08)';
+      const badgeText = isChosen ? '✅ Đã vinh danh' : '⏳ Chưa chọn';
+      const badgeColor = isChosen ? '#86efac' : '#94a3b8';
+
+      html += `
+        <div style="background: ${bg}; border: 1px solid ${border}; border-radius: 10px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 11px; color: #64748b; font-weight: 700; width: 22px;">#${star.id < 10 ? '0' + star.id : star.id}</span>
+            <span style="font-size: 13px; font-weight: 600; color: ${isChosen ? '#f0fdf4' : '#e2e8f0'};">${star.studentName}</span>
+          </div>
+          <span style="font-size: 11px; font-weight: 600; color: ${badgeColor};">${badgeText}</span>
+        </div>
+      `;
+    }
+    this.studentListContainer.innerHTML = html;
   }
 
   public dispose(): void {

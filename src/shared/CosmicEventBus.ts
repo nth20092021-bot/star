@@ -33,6 +33,11 @@ export interface CosmicEventMap {
    * Đưa góc quay camera và đài thiên văn về trạng thái quan sát tĩnh ban đầu
    */
   CAMERA_RESET: { immediate?: boolean; duration?: number };
+
+  /**
+   * Ẩn bảng thông báo vinh danh khi người dùng bấm Tiếp tục / Tiếp theo
+   */
+  DISMISS_PLAQUE: void;
 }
 
 export type CosmicEventListener<T> = (payload: T) => void;

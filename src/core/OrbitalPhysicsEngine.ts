@@ -25,6 +25,9 @@ export class OrbitalPhysicsEngine {
   private totalRouteSteps = 0;
   private winnerStarId = -1;
 
+  // Danh sách các học sinh đã từng được chọn (đảm bảo không lặp lại)
+  private chosenWinnerIds: Set<number> = new Set();
+
   // Easing và điều khiển vận tốc giảm tốc dần (tinh chỉnh cho tiến trình nhanh & mượt)
   private currentSpeed = 0;
   private baseMaxSpeed = 150; // Tốc độ phóng cực nhanh ban đầu (đơn vị/giây)
@@ -59,18 +62,27 @@ export class OrbitalPhysicsEngine {
 
   /**
    * Bắt đầu lộ trình dệt mạng lưới chòm sao giảm tốc dần
+   * Đảm bảo không lặp lại học sinh đã được chọn ở các vòng trước.
    * @param specifiedWinnerId Tùy chọn chỉ định ID ngôi sao chiến thắng (1 - 28)
    */
-  public startWeaving(specifiedWinnerId?: number): void {
-    if (this.isRunning) return;
+  public startWeaving(specifiedWinnerId?: number): boolean {
+    if (this.isRunning) return false;
+
+    // Lọc danh sách học sinh chưa từng được chọn
+    const unchosenStars = this.stars.filter((s) => !this.chosenWinnerIds.has(s.id));
+    if (unchosenStars.length === 0) {
+      console.warn('[OrbitalPhysicsEngine] Tất cả 28 học sinh đều đã được chọn!');
+      return false;
+    }
 
     this.resetStateForNewRun();
 
-    // Chọn ngẫu nhiên ngôi sao chiến thắng (hoặc chỉ định)
-    if (specifiedWinnerId && specifiedWinnerId >= 1 && specifiedWinnerId <= this.stars.length) {
+    // Chọn ngôi sao chiến thắng từ tập học sinh chưa được chọn
+    if (specifiedWinnerId && !this.chosenWinnerIds.has(specifiedWinnerId)) {
       this.winnerStarId = specifiedWinnerId;
     } else {
-      this.winnerStarId = Math.floor(Math.random() * this.stars.length) + 1;
+      const randIdx = Math.floor(Math.random() * unchosenStars.length);
+      this.winnerStarId = unchosenStars[randIdx].id;
     }
 
     // Tạo lộ trình dệt ngẫu nhiên gồm 8 bước dệt nhanh và dứt khoát qua các ngôi sao
@@ -117,6 +129,7 @@ export class OrbitalPhysicsEngine {
     console.log(
       `[OrbitalPhysicsEngine] Bắt đầu dệt chòm sao: ${this.totalRouteSteps} bước. Winner Star: #${this.winnerStarId}`
     );
+    return true;
   }
 
   /**
@@ -249,19 +262,36 @@ export class OrbitalPhysicsEngine {
 
   private onWeaveComplete(winnerStar: StarNode): void {
     this.isRunning = false;
+    this.chosenWinnerIds.add(winnerStar.id);
     winnerStar.isWinner = true;
     winnerStar.brightness = 3.5;
     this.comet.speedNormalized = 0;
     this.comet.velocity.set(0, 0, 0);
 
     console.log(
-      `🌟 [OrbitalPhysicsEngine] Khóa mục tiêu Supernova: "${winnerStar.studentName}" (#${winnerStar.id})!`
+      `🌟 [OrbitalPhysicsEngine] Khóa mục tiêu Supernova: "${winnerStar.studentName}" (#${winnerStar.id})! Đã chọn: ${this.chosenWinnerIds.size}/${this.stars.length}`
     );
 
     cosmicEventBus.emit('STAR_LOCKED_SUPERNOVA', {
       winnerStar,
       position: winnerStar.currentPosition.clone(),
     });
+  }
+
+  public getChosenWinnerIds(): Set<number> {
+    return this.chosenWinnerIds;
+  }
+
+  public getRemainingCount(): number {
+    return this.stars.length - this.chosenWinnerIds.size;
+  }
+
+  public resetChosenWinners(): void {
+    this.chosenWinnerIds.clear();
+    for (const star of this.stars) {
+      star.isWinner = false;
+    }
+    this.reset();
   }
 
   public reset(): void {

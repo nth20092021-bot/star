@@ -318,6 +318,10 @@ export class CelestialGraphicsEngine implements ICelestialGraphics {
     this.supernova?.trigger(winnerStar);
   }
 
+  public dismissPlaque(): void {
+    this.supernova?.reset();
+  }
+
   public resetVisuals(): void {
     this.web?.reset();
     this.supernova?.reset();

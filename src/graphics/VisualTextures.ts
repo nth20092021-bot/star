@@ -442,6 +442,7 @@ export function createGlowTexture(size = 256): THREE.CanvasTexture {
 /* ------------------------------------------------------------------ */
 
 export function createNamePlaqueTexture(studentName: string, anisotropy: number): THREE.CanvasTexture {
+  const cleanName = (studentName || '').normalize('NFC');
   const width = 2048;
   const height = 1024;
   const { canvas, ctx } = createCanvas(width, height);
@@ -556,7 +557,7 @@ export function createNamePlaqueTexture(studentName: string, anisotropy: number)
 
   // Tiêu đề
   setLetterSpacing(ctx, '12px');
-  ctx.font = '600 46px "Cormorant Garamond", Georgia, "Times New Roman", serif';
+  ctx.font = '700 46px "Playfair Display", "Be Vietnam Pro", "Times New Roman", "Segoe UI", serif';
   ctx.fillStyle = '#e8cfa0';
   ctx.shadowColor = 'rgba(255, 193, 92, 0.5)';
   ctx.shadowBlur = 22;
@@ -565,7 +566,7 @@ export function createNamePlaqueTexture(studentName: string, anisotropy: number)
   setLetterSpacing(ctx, '0px');
 
   // Đường phân cách dưới tiêu đề
-  const dividerY = frameY + 258;
+  const dividerY = frameY + 268;
   const divider = ctx.createLinearGradient(cx - 620, 0, cx + 620, 0);
   divider.addColorStop(0, 'rgba(255, 228, 170, 0)');
   divider.addColorStop(0.5, 'rgba(255, 228, 170, 0.75)');
@@ -580,18 +581,18 @@ export function createNamePlaqueTexture(studentName: string, anisotropy: number)
   ctx.stroke();
   drawSparkle(ctx, cx, dividerY, 11, '#ffe5ae', 0.9);
 
-  // Tên học sinh — co chữ vừa khung
-  let nameSize = 172;
+  // Tên học sinh — sử dụng font hỗ trợ tiếng Việt chuẩn xác và co chữ vừa khung
+  let nameSize = 180;
   const nameFont = (px: number) =>
-    `600 ${px}px "Cormorant Garamond", Georgia, "Times New Roman", serif`;
+    `700 ${px}px "Playfair Display", "Be Vietnam Pro", "Times New Roman", "Segoe UI", serif`;
   ctx.font = nameFont(nameSize);
-  while (ctx.measureText(studentName).width > frameW - 300 && nameSize > 76) {
+  while (ctx.measureText(cleanName).width > frameW - 280 && nameSize > 72) {
     nameSize -= 4;
     ctx.font = nameFont(nameSize);
   }
 
-  const nameY = frameY + 448;
-  const nameGradient = ctx.createLinearGradient(0, nameY - nameSize * 0.72, 0, nameY + nameSize * 0.55);
+  const nameY = frameY + frameH * 0.54;
+  const nameGradient = ctx.createLinearGradient(0, nameY - nameSize * 0.7, 0, nameY + nameSize * 0.5);
   nameGradient.addColorStop(0, '#fff9e8');
   nameGradient.addColorStop(0.42, '#f5ddA4');
   nameGradient.addColorStop(0.74, '#d8ae62');
@@ -601,24 +602,9 @@ export function createNamePlaqueTexture(studentName: string, anisotropy: number)
   ctx.lineWidth = 1.5;
   ctx.shadowColor = 'rgba(255, 198, 96, 0.62)';
   ctx.shadowBlur = 46;
-  ctx.fillText(studentName, cx, nameY);
+  ctx.fillText(cleanName, cx, nameY);
   ctx.shadowBlur = 0;
-  ctx.strokeText(studentName, cx, nameY);
-
-  // Tên đài thiên văn
-  ctx.font = 'italic 46px "Cormorant Garamond", Georgia, "Times New Roman", serif';
-  ctx.fillStyle = 'rgba(189, 213, 255, 0.9)';
-  ctx.shadowColor = 'rgba(108, 160, 255, 0.45)';
-  ctx.shadowBlur = 18;
-  ctx.fillText('Đài Thiên Văn Dệt Chòm Sao', cx, frameY + 596);
-  ctx.shadowBlur = 0;
-
-  // Dòng chú thích nhỏ
-  setLetterSpacing(ctx, '7px');
-  ctx.font = '400 25px "Segoe UI", Tahoma, sans-serif';
-  ctx.fillStyle = 'rgba(236, 216, 172, 0.62)';
-  ctx.fillText('28 VÌ TINH TÚ · MỘT NGÔI SAO ĐỊNH MỆNH', cx, frameY + 664);
-  setLetterSpacing(ctx, '0px');
+  ctx.strokeText(cleanName, cx, nameY);
 
   // Chòm sao trang trí cuối khung
   const ornamentY = frameY + frameH - 104;
