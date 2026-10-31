@@ -149,9 +149,12 @@ export class ObservatoryCameraDirector {
       this.finaleViewDir.y = Math.max(0.18, Math.min(0.45, this.finaleViewDir.y));
       this.finaleViewDir.normalize();
 
-      // Khóa tức thì mục tiêu ngắm chính xác vào tâm ngôi sao nổ
+      // Khóa tức thì mục tiêu ngắm và hướng nhìn chính xác vào tâm ngôi sao nổ
       this.desiredLookTarget.copy(this.winnerPosition);
       this.smoothedLookTarget.copy(this.winnerPosition);
+      this.tmpMatrix.lookAt(this.posePosition, this.winnerPosition, WORLD_UP);
+      this.poseQuaternion.setFromRotationMatrix(this.tmpMatrix);
+      this.desiredQuaternion.copy(this.poseQuaternion);
 
       this.linkedPositions.unshift(winnerStar.currentPosition.clone());
       if (this.linkedPositions.length > 4) {
