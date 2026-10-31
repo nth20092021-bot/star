@@ -370,7 +370,7 @@ export class SupernovaEffect {
   /* ------------------------------------------------------------------ */
 
   public renderOverlay(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
-    if (!this.active || !this.plaqueTexture || this.time < 0.55) return;
+    if (!this.active || !this.plaqueTexture || this.time < 0.15) return;
 
     this.updatePlaqueTransform(camera);
 
@@ -387,10 +387,10 @@ export class SupernovaEffect {
     const height = this.viewportHeight;
     const t = this.time;
 
-    const baseWidth = Math.min(width * 0.86, height * 1.25, 900);
+    const baseWidth = Math.min(width * 0.88, height * 1.3, 940);
     const baseHeight = baseWidth * 0.5;
 
-    const appear = clamp((t - 0.55) / 2.1, 0, 1);
+    const appear = clamp((t - 0.15) / 0.9, 0, 1);
     const pop = Math.min(1.035, easeOutBack(appear));
     const scaleMultiplier = 0.08 + 0.92 * pop;
 
@@ -407,14 +407,14 @@ export class SupernovaEffect {
     const targetX = 0;
     const targetY = height * 0.035;
 
-    const move = easeInOutCubic(clamp((t - 0.55) / 1.55, 0, 1));
-    const float = Math.sin(t * 0.55) * 1.6 * move;
+    const move = easeInOutCubic(clamp((t - 0.15) / 0.8, 0, 1));
+    const float = Math.sin(t * 0.8) * 1.6 * move;
     const x = THREE.MathUtils.lerp(startX, targetX, move);
     const y = THREE.MathUtils.lerp(startY, targetY, move) + float;
 
     this.plaqueMesh.position.set(x, y, 0);
     this.plaqueMesh.scale.set(baseWidth * scaleMultiplier, baseHeight * scaleMultiplier, 1);
-    this.plaqueMaterial.opacity = clamp((t - 0.55) / 0.85, 0, 1) * 0.98;
+    this.plaqueMaterial.opacity = clamp((t - 0.15) / 0.45, 0, 1) * 0.98;
   }
 
   private applyOverlayViewport(): void {

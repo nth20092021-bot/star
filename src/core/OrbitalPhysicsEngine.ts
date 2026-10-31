@@ -25,11 +25,11 @@ export class OrbitalPhysicsEngine {
   private totalRouteSteps = 0;
   private winnerStarId = -1;
 
-  // Easing và điều khiển vận tốc giảm tốc dần
+  // Easing và điều khiển vận tốc giảm tốc dần (tinh chỉnh cho tiến trình nhanh & mượt)
   private currentSpeed = 0;
-  private baseMaxSpeed = 48; // Đơn vị/giây ở nhịp đầu
-  private minSpeed = 5;      // Đơn vị/giây ở nhịp cuối gần ngôi sao chiến thắng
-  private arrivalThreshold = 1.35;
+  private baseMaxSpeed = 150; // Tốc độ phóng cực nhanh ban đầu (đơn vị/giây)
+  private minSpeed = 26;      // Vận tốc lượn nhịp cuối chậm lại hồi hộp
+  private arrivalThreshold = 1.9;
   private previousLinkedStarId = -1;
 
   constructor() {
@@ -73,8 +73,8 @@ export class OrbitalPhysicsEngine {
       this.winnerStarId = Math.floor(Math.random() * this.stars.length) + 1;
     }
 
-    // Tạo lộ trình dệt ngẫu nhiên gồm 10 đến 14 bước dệt qua các ngôi sao
-    const numSteps = 12;
+    // Tạo lộ trình dệt ngẫu nhiên gồm 8 bước dệt nhanh và dứt khoát qua các ngôi sao
+    const numSteps = 8;
     const availableIds = this.stars
       .map((s) => s.id)
       .filter((id) => id !== this.winnerStarId);
@@ -186,11 +186,11 @@ export class OrbitalPhysicsEngine {
     // Thêm lực xoáy cung nhẹ (Arc bias) để sao chổi bay lượn hình vòng cung không gian
     const arcAxis = new THREE.Vector3(0, 1, 0);
     const arcVector = new THREE.Vector3().crossVectors(desiredVelocity, arcAxis).normalize();
-    const arcStrength = Math.sin(elapsed * 4 + this.routeIndex) * (this.currentSpeed * 0.18);
+    const arcStrength = Math.sin(elapsed * 5 + this.routeIndex) * (this.currentSpeed * 0.12);
     desiredVelocity.addScaledVector(arcVector, arcStrength);
 
-    // Quán tính: Damped interpolation cho vận tốc
-    const steerSharpness = Math.min(1, dt * 7.5);
+    // Quán tính: Damped interpolation cho vận tốc lượn nhanh & dứt khoát
+    const steerSharpness = Math.min(1, dt * 14.0);
     this.comet.velocity.lerp(desiredVelocity, steerSharpness);
 
     // Cập nhật vị trí
@@ -297,3 +297,4 @@ export class OrbitalPhysicsEngine {
     return this.stars.find((s) => s.id === id);
   }
 }
+

@@ -111,3 +111,4 @@ export function updateStarOrbit(star: StarNode, elapsed: number): void {
 
   star.currentPosition.set(rx, tiltY, rz);
 }
+
