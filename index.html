@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Đài Thiên Văn Dệt Chòm Sao</title>
+    <!-- Google Fonts hỗ trợ tiếng Việt toàn diện và chuẩn mực (Playfair Display & Be Vietnam Pro) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #030308;
+        font-family: 'Be Vietnam Pro', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #e6edf3;
+        user-select: none;
+      }
+      #celestial-canvas-container {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+      }
+      #celestial-ui {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        pointer-events: none;
+      }
+      .interactive {
+        pointer-events: auto;
+      }
+      /* Tùy chỉnh thanh cuộn cho bảng danh sách học sinh */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: rgba(10, 15, 30, 0.6);
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 209, 102, 0.35);
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 209, 102, 0.6);
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-CL2fzgPQ.js"></script>
+  </head>
+  <body>
+    <div id="celestial-canvas-container"></div>
+    <div id="celestial-ui"></div>
+  </body>
+</html>
