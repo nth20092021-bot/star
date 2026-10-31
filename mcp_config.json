@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "description": "Context7 MCP: Query Three.js (r170+), LineSegments, UnrealBloomPass, and GSAP documentation"
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "description": "Sequential Thinking MCP: Step-by-step reasoning for GLSL shaders and spherical collision-free orbits"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\Admin\\Documents\\gametest_1004"
+      ],
+      "description": "Filesystem MCP: Access control and file operations across workspace"
+    },
+    "git": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "C:\\Users\\Admin\\Documents\\gametest_1004"
+      ],
+      "description": "Git MCP: Version control, diff tracking, and staged changes"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "description": "Playwright MCP: Headless/headed browser testing for WebGL canvas, GLSL shader compilation error catching, and FPS profiling"
+    },
+    "threejs-devtools": {
+      "command": "npx",
+      "args": ["-y", "threejs-devtools-mcp"],
+      "description": "Three.js DevTools MCP: Inspect 3D scene graph, draw calls, materials, and renderer statistics"
+    }
+  }
+}

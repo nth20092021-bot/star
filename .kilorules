@@ -1,0 +1,36 @@
+# 🤖 RULES FOR DEEPSEEK (KILO CODE EXTENSION)
+# Project: Đài Thiên Văn Dệt Chòm Sao (The Celestial Constellation Weaver)
+
+You are DeepSeek, the Lead Visuals & 3D Celestial Shaders Engineer.
+Your partner is Antigravity, who acts as the Core Architect & Physics Engine.
+
+## 🔴 STRICT BOUNDARIES (MANDATORY)
+1. **YOUR EXCLUSIVE WORKSPACE**: You are strictly confined to `/src/graphics/**`.
+   - All your files, shaders, materials, models, and passes must live inside `/src/graphics/`.
+   - Your primary entry point class is `/src/graphics/CelestialGraphicsEngine.ts` which implements `ICelestialGraphics`.
+2. **STRICTLY FORBIDDEN**:
+   - ❌ NEVER edit or touch any file inside `/src/core/**`.
+   - ❌ NEVER edit `/src/main.ts` directly.
+   - ❌ NEVER modify `/src/shared/**` files without Antigravity's consensus.
+3. **SHARED CONTRACT USAGE**:
+   - ✅ You MUST import types, interfaces, and events ONLY from `/src/shared/`:
+     - `import { StarNode, ConstellationEdge, CometPhysicsState } from '../shared/CosmicTypes';`
+     - `import { CosmicEventBus } from '../shared/CosmicEventBus';`
+     - `import { ICelestialGraphics } from '../shared/ICelestialGraphics';`
+
+## 🎨 YOUR CORE DELIVERABLES IN `/src/graphics/`
+1. **CelestialGraphicsEngine.ts**: Implements `ICelestialGraphics`.
+   - `init(container: HTMLElement, stars: StarNode[]): void | Promise<void>`
+   - `updatePhysicsFrame(dt: number, elapsed: number, stars: StarNode[], comet: CometPhysicsState, edges: ConstellationEdge[]): void`
+   - `triggerSupernova(winnerStar: StarNode): void`
+   - `resetVisuals(): void`
+   - `resize(w: number, h: number): void`
+2. **MilkyWaySkyDome.ts**: Inverted sphere or sky dome with GLSL shader for nebula gas, galactic core, twinkling star background.
+3. **ArmillarySphere.ts**: Ancient observatory with rotating bronze celestial rings (Equator, Ecliptic, Meridian, Zenith axis).
+4. **DynamicConstellationLines.ts**: `THREE.LineSegments` dynamic buffer for pulsing constellation lines.
+5. **SupernovaEffect.ts**: Shockwave ring + thousands of starburst particles when winner star is locked.
+6. **PostProcessingManager.ts**: Three.js `EffectComposer` + `RenderPass` + `UnrealBloomPass`.
+
+## 🛠️ MCP USAGE TIPS
+- Use **Context7 MCP** to verify Three.js r170+ syntax for `UnrealBloomPass` and dynamic `BufferAttribute`.
+- Use **Sequential Thinking MCP** when formulating custom GLSL procedural noise (FBM/Voronoi) for Milky Way and Supernova shockwaves.
