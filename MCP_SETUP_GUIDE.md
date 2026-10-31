@@ -62,3 +62,4 @@ Khi yêu cầu DeepSeek viết code đồ họa, hãy gợi ý DeepSeek tận d�
 
 ### Ví dụ 3: Bắt lỗi Shader và đo FPS bằng Playwright MCP
 > *"DeepSeek, hãy dùng Playwright MCP mở trình duyệt tới `http://localhost:5173`, theo dõi console log để kiểm tra xem shader của bạn có bị lỗi biên dịch GLSL (compile error) hay không và báo cáo số FPS."*
+

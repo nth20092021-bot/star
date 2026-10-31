@@ -76,3 +76,4 @@ Cả hai agent sử dụng các MCP Server được cấu hình trong `mcp_confi
   - Commit của Antigravity: `feat(core): ...`, `refactor(core): ...`, `contract(shared): ...`
   - Commit của DeepSeek: `feat(graphics): ...`, `shader(graphics): ...`, `fx(supernova): ...`
 - **Playwright MCP (`@playwright/mcp`)**: Dùng để mở web chạy thử, kiểm tra WebGL context, lắng nghe `console.error` (bắt lỗi GLSL compile shader) và đo đạc FPS ổn định 60fps.
+

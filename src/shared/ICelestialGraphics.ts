@@ -67,3 +67,4 @@ export interface ICelestialGraphics {
    */
   dispose?(): void;
 }
+

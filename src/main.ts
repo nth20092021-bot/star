@@ -1,23 +1,41 @@
-import { cosmicEventBus } from './shared/CosmicEventBus';
-import type { StarNode } from './shared/CosmicTypes';
+import {
+  OrbitalPhysicsEngine,
+  ObservatoryCameraDirector,
+  MinimalUI,
+} from './core';
 import { CelestialGraphicsEngine } from './graphics/CelestialGraphicsEngine';
+import { cosmicEventBus } from './shared/CosmicEventBus';
 
-// Khởi tạo container và engine đồ họa
-const container = document.getElementById('celestial-canvas-container');
-
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
+  const container = document.getElementById('celestial-canvas-container');
   if (!container) {
-    console.error('Không tìm thấy #celestial-canvas-container');
+    console.error('Không tìm thấy #celestial-canvas-container trong DOM');
     return;
   }
 
-  // Khởi tạo danh sách 28 ngôi sao đại diện ban đầu (Antigravity /src/core sẽ tạo thuật toán quỹ đạo chính thức)
-  const initialStars: StarNode[] = [];
+  // 1. Khởi tạo OrbitalPhysicsEngine (Antigravity /src/core)
+  const physicsEngine = new OrbitalPhysicsEngine();
+  const initialStars = physicsEngine.getStars();
 
+  // 2. Khởi tạo ObservatoryCameraDirector
+  const cameraDirector = new ObservatoryCameraDirector();
+
+  // 3. Khởi tạo CelestialGraphicsEngine (DeepSeek /src/graphics)
   const graphicsEngine = new CelestialGraphicsEngine();
-  await graphicsEngine.init(container, initialStars);
+  graphicsEngine.init(container, initialStars);
 
-  // Đăng ký các sự kiện cơ bản từ CosmicEventBus
+  // 4. Khởi tạo MinimalUI với các callback điều khiển
+  new MinimalUI('celestial-ui', {
+    onStart: () => {
+      physicsEngine.startWeaving();
+    },
+    onReset: () => {
+      physicsEngine.reset();
+      graphicsEngine.resetVisuals();
+    },
+  });
+
+  // 5. Kết nối các sự kiện trên CosmicEventBus giữa Core & Graphics
   cosmicEventBus.on('STAR_LOCKED_SUPERNOVA', ({ winnerStar }) => {
     graphicsEngine.triggerSupernova(winnerStar);
   });
@@ -26,11 +44,40 @@ async function bootstrap() {
     graphicsEngine.resetVisuals();
   });
 
-  window.addEventListener('resize', () => {
+  // 6. Xử lý Window Resize
+  const handleResize = (): void => {
     graphicsEngine.resize(window.innerWidth, window.innerHeight);
-  });
+  };
+  window.addEventListener('resize', handleResize);
 
-  console.log('🌌 [Main] Đài Thiên Văn Dệt Chòm Sao đã sẵn sàng.');
+  // 7. Vòng lặp requestAnimationFrame truyền dữ liệu vật lý sang đồ họa
+  let lastTimestamp = performance.now();
+  let elapsed = 0;
+
+  const loop = (now: number): void => {
+    requestAnimationFrame(loop);
+
+    const dt = Math.min((now - lastTimestamp) / 1000, 0.05);
+    lastTimestamp = now;
+    elapsed += dt;
+
+    // Cập nhật tính toán vật lý quỹ đạo 28 sao và sao chổi
+    physicsEngine.update(dt, elapsed);
+
+    const stars = physicsEngine.getStars();
+    const comet = physicsEngine.getCometState();
+    const edges = physicsEngine.getEdges();
+
+    // Cập nhật đạo diễn Camera
+    cameraDirector.update(dt, comet);
+
+    // Cung cấp frame vật lý cho CelestialGraphicsEngine vẽ (Three.js + PostProcessing)
+    graphicsEngine.updatePhysicsFrame(dt, elapsed, stars, comet, edges);
+  };
+
+  requestAnimationFrame(loop);
+
+  console.log('🌌 [Main] Đài Thiên Văn Dệt Chòm Sao đã kết nối thành công và đang hoạt động.');
 }
 
 bootstrap().catch(console.error);

@@ -110,3 +110,4 @@ export const CELESTIAL_CONSTANTS = {
   ARMILLARY_RADIUS: 36,
   MAX_TAIL_LENGTH: 40,
 } as const;
+

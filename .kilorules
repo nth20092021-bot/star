@@ -34,3 +34,4 @@ Your partner is Antigravity, who acts as the Core Architect & Physics Engine.
 ## 🛠️ MCP USAGE TIPS
 - Use **Context7 MCP** to verify Three.js r170+ syntax for `UnrealBloomPass` and dynamic `BufferAttribute`.
 - Use **Sequential Thinking MCP** when formulating custom GLSL procedural noise (FBM/Voronoi) for Milky Way and Supernova shockwaves.
+
