@@ -14,7 +14,7 @@ import { generateCelestialStars, updateStarOrbit } from './CelestialOrbits';
 
 const ACT1_LAUNCH = 2.0;
 const ACT2_END = 7.5;
-const ACT2_VISIT_COUNT = 14;
+const ACT2_VISIT_COUNT = 8;
 
 /**
  * Mốc chạm sao (giây):
@@ -378,7 +378,7 @@ export class OrbitalPhysicsEngine {
 
     // Cú lao cuối: khởi đầu gần như đứng yên (fake-out), rồi tăng tốc dữ dội.
     if (segmentIndex === this.route.length - 1) {
-      return Math.pow(p, 2.35);
+      return 1 - Math.pow(1 - p, 1.8);
     }
 
     // Đoạn tới ngôi áp chót: bay nhanh rồi ghìm dần, gần như dừng tại 9.0s.

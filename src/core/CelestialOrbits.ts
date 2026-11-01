@@ -68,7 +68,7 @@ export function generateCelestialStars(): StarNode[] {
     // Góc nghiêng quỹ đạo riêng biệt cho từng ngôi sao
     const inclination = ((i % 5) - 2) * 0.12 + (i * 0.03);
     // Tốc độ xoay vi phân chậm rãi quanh trục đài thiên văn
-    const azimuthSpeed = 0.025 + ((i % 7) * 0.008);
+    const azimuthSpeed = 0.008 + ((i % 7) * 0.003);
 
     const rawName = STUDENT_NAMES[i] || `Vì Sao Thứ ${i + 1}`;
     const name = rawName.normalize('NFC');

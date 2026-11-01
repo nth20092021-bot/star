@@ -411,10 +411,11 @@ export class ObservatoryCameraDirector {
     );
 
     // Ống kính bám sao chổi với lead ngắn, giữ nó gần tâm khung hình.
+    const lead = (1 - dash) * 1.5;
     this.desiredLookTarget
       .copy(comet.position)
-      .addScaledVector(this.lastCometDirection, 2.4 + dash * 1.2);
-    this.desiredLookTarget.y += 0.7;
+      .addScaledVector(this.lastCometDirection, lead);
+    this.desiredLookTarget.y += (1 - dash) * 0.25;
 
     // Nhả roll từ từ để đường chân trời ổn định khi vào slow-mo.
     this.bank *= Math.exp(-dt * 2.0);
